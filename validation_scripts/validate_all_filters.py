@@ -29,7 +29,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.abs_diff import (  # noqa: E402
+from validation_scripts.abs_diff import (  # noqa: E402
     load_unity_reference,
     score_abs_diff,
 )

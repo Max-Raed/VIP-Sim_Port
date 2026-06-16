@@ -1,0 +1,12 @@
+# VipSim shader-equivalence validation dependencies.
+# Install:  pip install -r requirements.txt
+numpy
+pillow
+scipy
+scikit-image
+imageio-ffmpeg        # bundled ffmpeg binary for burst --make-video (no sudo needed)
+
+# Optional, informational only (heavy). The validators lazy-load lpips and
+# tolerate its absence; uncomment if you want the LPIPS metric column populated.
+# lpips
+# torch
