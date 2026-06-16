@@ -1,0 +1,52 @@
+{
+  "overall": {
+    "mean": 105.39335632324219,
+    "max": 255.0,
+    "p50": 101.0,
+    "p95": 222.0,
+    "p99": 250.0
+  },
+  "per_channel": {
+    "R": {
+      "mean": 105.50572204589844,
+      "max": 255.0,
+      "p50": 101.0,
+      "p95": 221.0,
+      "p99": 238.0
+    },
+    "G": {
+      "mean": 104.04374694824219,
+      "max": 254.0,
+      "p50": 99.0,
+      "p95": 222.0,
+      "p99": 246.0
+    },
+    "B": {
+      "mean": 106.630615234375,
+      "max": 255.0,
+      "p50": 104.0,
+      "p95": 227.0,
+      "p99": 255.0
+    }
+  },
+  "image_size": [
+    446,
+    254
+  ],
+  "profile": "p7",
+  "mode": "participants_panel",
+  "filters": [
+    {
+      "filter": "floaters",
+      "severity": 0.6,
+      "n_floaters": 18,
+      "mode": "dark"
+    },
+    {
+      "filter": "field_loss",
+      "severity": 0.3,
+      "field_type": "central",
+      "overlay_scale": 1.0
+    }
+  ]
+}

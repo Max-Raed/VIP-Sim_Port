@@ -1,0 +1,1883 @@
+{
+  "blur": {
+    "filter": "blur",
+    "unity_ref": "blur_cpd28.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 0.2
+      },
+      "mae_mean": 4.277090549468994,
+      "mae_p95": 18.0,
+      "ssim": 0.9642623066902161,
+      "ssim_blur": 0.9851408004760742,
+      "deltaE2000_mean": 1.9779765605926514,
+      "wasserstein_mean": 3.726820627848307,
+      "lpips": 0.05044952780008316
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 7.834001064300537,
+        "mae_p95": 31.0,
+        "ssim": 0.8275039792060852,
+        "ssim_blur": 0.9674077033996582,
+        "deltaE2000_mean": 3.2281177043914795,
+        "wasserstein_mean": 5.214144229888916,
+        "lpips": 0.30008113384246826
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 4.277090549468994,
+        "mae_p95": 18.0,
+        "ssim": 0.9642623066902161,
+        "ssim_blur": 0.9851408004760742,
+        "deltaE2000_mean": 1.9779765605926514,
+        "wasserstein_mean": 3.726820627848307,
+        "lpips": 0.05044952780008316
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 4.662798881530762,
+        "mae_p95": 18.0,
+        "ssim": 0.9549344182014465,
+        "ssim_blur": 0.9844030737876892,
+        "deltaE2000_mean": 2.0929031372070312,
+        "wasserstein_mean": 3.7324094772338867,
+        "lpips": 0.08123661577701569
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 6.633063793182373,
+        "mae_p95": 23.0,
+        "ssim": 0.8967688083648682,
+        "ssim_blur": 0.9625308513641357,
+        "deltaE2000_mean": 2.837286949157715,
+        "wasserstein_mean": 3.842915693918864,
+        "lpips": 0.18637484312057495
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 8.70309066772461,
+        "mae_p95": 29.0,
+        "ssim": 0.8428752422332764,
+        "ssim_blur": 0.9317397475242615,
+        "deltaE2000_mean": 3.6366398334503174,
+        "wasserstein_mean": 4.128966808319092,
+        "lpips": 0.27979418635368347
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 10.50769329071045,
+        "mae_p95": 34.0,
+        "ssim": 0.8030443787574768,
+        "ssim_blur": 0.9017236232757568,
+        "deltaE2000_mean": 4.345798492431641,
+        "wasserstein_mean": 4.6702189445495605,
+        "lpips": 0.35551199316978455
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 12.065657615661621,
+        "mae_p95": 38.0,
+        "ssim": 0.7742655277252197,
+        "ssim_blur": 0.875755250453949,
+        "deltaE2000_mean": 4.9649739265441895,
+        "wasserstein_mean": 5.401060581207275,
+        "lpips": 0.4174883961677551
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 13.42791748046875,
+        "mae_p95": 42.0,
+        "ssim": 0.7533969283103943,
+        "ssim_blur": 0.8541419506072998,
+        "deltaE2000_mean": 5.509700775146484,
+        "wasserstein_mean": 6.205414772033691,
+        "lpips": 0.46875399351119995
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 14.63890552520752,
+        "mae_p95": 45.0,
+        "ssim": 0.737539529800415,
+        "ssim_blur": 0.8361799120903015,
+        "deltaE2000_mean": 5.996049880981445,
+        "wasserstein_mean": 6.96713908513387,
+        "lpips": 0.5115149021148682
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 15.720817565917969,
+        "mae_p95": 48.0,
+        "ssim": 0.725252091884613,
+        "ssim_blur": 0.8212370276451111,
+        "deltaE2000_mean": 6.431288242340088,
+        "wasserstein_mean": 7.6741994222005205,
+        "lpips": 0.5474432706832886
+      }
+    ]
+  },
+  "bloom": {
+    "filter": "bloom",
+    "unity_ref": "bloom_int20_thr03.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "intensity": 2.0,
+        "threshold": 0.3,
+        "blur_size": 1.0,
+        "iterations": 1
+      },
+      "mae_mean": 3.4679787158966064,
+      "mae_p95": 12.0,
+      "ssim": 0.9702282547950745,
+      "ssim_blur": 0.995579183101654,
+      "deltaE2000_mean": 2.0572502613067627,
+      "wasserstein_mean": 1.9085822105407715,
+      "lpips": 0.029395271092653275
+    },
+    "all": [
+      {
+        "params": {
+          "intensity": 2.0,
+          "threshold": 0.3,
+          "blur_size": 1.0,
+          "iterations": 1
+        },
+        "mae_mean": 3.4679787158966064,
+        "mae_p95": 12.0,
+        "ssim": 0.9702282547950745,
+        "ssim_blur": 0.995579183101654,
+        "deltaE2000_mean": 2.0572502613067627,
+        "wasserstein_mean": 1.9085822105407715,
+        "lpips": 0.029395271092653275
+      }
+    ]
+  },
+  "cataracts": {
+    "filter": "cataracts",
+    "unity_ref": "cataract_sev04.png",
+    "sweep_key": "severity",
+    "criterion": "ssim_blur",
+    "best": {
+      "params": {
+        "severity": 0.4
+      },
+      "mae_mean": 10.512421607971191,
+      "mae_p95": 39.0,
+      "ssim": 0.3618789613246918,
+      "ssim_blur": 0.9925117492675781,
+      "deltaE2000_mean": 3.9565653800964355,
+      "wasserstein_mean": 0.40819327036539715,
+      "lpips": 0.14899562299251556
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 33.93122482299805,
+        "mae_p95": 77.0,
+        "ssim": 0.29155340790748596,
+        "ssim_blur": 0.8210181593894958,
+        "deltaE2000_mean": 16.546279907226562,
+        "wasserstein_mean": 27.237629254659016,
+        "lpips": 0.6135196089744568
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 24.34111976623535,
+        "mae_p95": 59.0,
+        "ssim": 0.3052896559238434,
+        "ssim_blur": 0.9348180890083313,
+        "deltaE2000_mean": 10.987672805786133,
+        "wasserstein_mean": 17.24524958928426,
+        "lpips": 0.39395251870155334
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 16.291879653930664,
+        "mae_p95": 47.0,
+        "ssim": 0.33051493763923645,
+        "ssim_blur": 0.9808483719825745,
+        "deltaE2000_mean": 6.697422027587891,
+        "wasserstein_mean": 8.392428557078043,
+        "lpips": 0.22761943936347961
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 10.512421607971191,
+        "mae_p95": 39.0,
+        "ssim": 0.3618789613246918,
+        "ssim_blur": 0.9925117492675781,
+        "deltaE2000_mean": 3.9565653800964355,
+        "wasserstein_mean": 0.40819327036539715,
+        "lpips": 0.14899562299251556
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 12.770829200744629,
+        "mae_p95": 35.0,
+        "ssim": 0.39682865142822266,
+        "ssim_blur": 0.9916033744812012,
+        "deltaE2000_mean": 5.097594261169434,
+        "wasserstein_mean": 7.333949089050293,
+        "lpips": 0.1916627734899521
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 17.37397575378418,
+        "mae_p95": 35.0,
+        "ssim": 0.43019530177116394,
+        "ssim_blur": 0.9869629740715027,
+        "deltaE2000_mean": 7.063109397888184,
+        "wasserstein_mean": 14.724338213602701,
+        "lpips": 0.3096894919872284
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 23.1074275970459,
+        "mae_p95": 42.0,
+        "ssim": 0.4537189304828644,
+        "ssim_blur": 0.9807348847389221,
+        "deltaE2000_mean": 9.182767868041992,
+        "wasserstein_mean": 22.03744141260783,
+        "lpips": 0.4857092499732971
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 29.899900436401367,
+        "mae_p95": 52.0,
+        "ssim": 0.46401962637901306,
+        "ssim_blur": 0.9733166694641113,
+        "deltaE2000_mean": 11.334747314453125,
+        "wasserstein_mean": 29.58442227045695,
+        "lpips": 0.702312171459198
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 37.50080490112305,
+        "mae_p95": 61.0,
+        "ssim": 0.4630976617336273,
+        "ssim_blur": 0.9647278785705566,
+        "deltaE2000_mean": 13.443520545959473,
+        "wasserstein_mean": 37.44698031743368,
+        "lpips": 0.8528928160667419
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 45.37064743041992,
+        "mae_p95": 71.0,
+        "ssim": 0.45892515778541565,
+        "ssim_blur": 0.9553681015968323,
+        "deltaE2000_mean": 15.37519359588623,
+        "wasserstein_mean": 45.37064552307129,
+        "lpips": 0.8816375732421875
+      }
+    ]
+  },
+  "cvd": {
+    "filter": "cvd",
+    "unity_ref": "cvd_deutan_sev06.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "cvd_type": "deuteranomaly",
+        "severity": 0.6
+      },
+      "mae_mean": 2.8131701946258545,
+      "mae_p95": 10.0,
+      "ssim": 0.9712467789649963,
+      "ssim_blur": 0.998345673084259,
+      "deltaE2000_mean": 1.7075293064117432,
+      "wasserstein_mean": 0.827301820119222,
+      "lpips": 0.03216961771249771
+    },
+    "all": [
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.1
+        },
+        "mae_mean": 3.743480682373047,
+        "mae_p95": 13.0,
+        "ssim": 0.9650523662567139,
+        "ssim_blur": 0.9931657910346985,
+        "deltaE2000_mean": 3.1513166427612305,
+        "wasserstein_mean": 1.258833885192871,
+        "lpips": 0.0634690374135971
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.2
+        },
+        "mae_mean": 3.343670606613159,
+        "mae_p95": 11.0,
+        "ssim": 0.9679135680198669,
+        "ssim_blur": 0.995527982711792,
+        "deltaE2000_mean": 2.710672378540039,
+        "wasserstein_mean": 1.0967297554016113,
+        "lpips": 0.05171392485499382
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.3
+        },
+        "mae_mean": 3.0480329990386963,
+        "mae_p95": 10.0,
+        "ssim": 0.9696010947227478,
+        "ssim_blur": 0.9969544410705566,
+        "deltaE2000_mean": 2.3148486614227295,
+        "wasserstein_mean": 0.9521567026774088,
+        "lpips": 0.04359026625752449
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.4
+        },
+        "mae_mean": 2.8696658611297607,
+        "mae_p95": 9.0,
+        "ssim": 0.9706291556358337,
+        "ssim_blur": 0.9977831244468689,
+        "deltaE2000_mean": 1.9997458457946777,
+        "wasserstein_mean": 0.836418628692627,
+        "lpips": 0.038138505071401596
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.5
+        },
+        "mae_mean": 2.8190088272094727,
+        "mae_p95": 9.0,
+        "ssim": 0.9710914492607117,
+        "ssim_blur": 0.9981927275657654,
+        "deltaE2000_mean": 1.798802137374878,
+        "wasserstein_mean": 0.819329579671224,
+        "lpips": 0.03437069430947304
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.6
+        },
+        "mae_mean": 2.8131701946258545,
+        "mae_p95": 10.0,
+        "ssim": 0.9712467789649963,
+        "ssim_blur": 0.998345673084259,
+        "deltaE2000_mean": 1.7075293064117432,
+        "wasserstein_mean": 0.827301820119222,
+        "lpips": 0.03216961771249771
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.7
+        },
+        "mae_mean": 2.8326351642608643,
+        "mae_p95": 10.0,
+        "ssim": 0.9712631106376648,
+        "ssim_blur": 0.9983420372009277,
+        "deltaE2000_mean": 1.733184576034546,
+        "wasserstein_mean": 0.856512705485026,
+        "lpips": 0.03083854168653488
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.8
+        },
+        "mae_mean": 2.8684780597686768,
+        "mae_p95": 10.0,
+        "ssim": 0.9711334705352783,
+        "ssim_blur": 0.9982194900512695,
+        "deltaE2000_mean": 1.8458962440490723,
+        "wasserstein_mean": 0.8712449073791504,
+        "lpips": 0.031843431293964386
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 0.9
+        },
+        "mae_mean": 2.9110658168792725,
+        "mae_p95": 10.0,
+        "ssim": 0.9709479212760925,
+        "ssim_blur": 0.9980359077453613,
+        "deltaE2000_mean": 1.9980907440185547,
+        "wasserstein_mean": 0.872966448465983,
+        "lpips": 0.03337523341178894
+      },
+      {
+        "params": {
+          "cvd_type": "deuteranomaly",
+          "severity": 1.0
+        },
+        "mae_mean": 2.9602158069610596,
+        "mae_p95": 10.0,
+        "ssim": 0.970735490322113,
+        "ssim_blur": 0.9978174567222595,
+        "deltaE2000_mean": 2.157986640930176,
+        "wasserstein_mean": 0.901939868927002,
+        "lpips": 0.036166541278362274
+      }
+    ]
+  },
+  "distortion": {
+    "filter": "distortion",
+    "unity_ref": "distortion_default.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 1.0
+      },
+      "mae_mean": 3.4025681018829346,
+      "mae_p95": 11.0,
+      "ssim": 0.9393040537834167,
+      "ssim_blur": 0.9978969097137451,
+      "deltaE2000_mean": 2.179311752319336,
+      "wasserstein_mean": 0.682736873626709,
+      "lpips": 0.03763645887374878
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 3.4025681018829346,
+        "mae_p95": 11.0,
+        "ssim": 0.9393040537834167,
+        "ssim_blur": 0.9978969097137451,
+        "deltaE2000_mean": 2.179311752319336,
+        "wasserstein_mean": 0.682736873626709,
+        "lpips": 0.03763645887374878
+      }
+    ]
+  },
+  "double_vision": {
+    "filter": "double_vision",
+    "unity_ref": "doublevisioneffect.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 1.0
+      },
+      "mae_mean": 6.764415264129639,
+      "mae_p95": 26.0,
+      "ssim": 0.9271643161773682,
+      "ssim_blur": 0.9758315086364746,
+      "deltaE2000_mean": 3.3136954307556152,
+      "wasserstein_mean": 5.262760003407796,
+      "lpips": 0.08885455131530762
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 33.62797546386719,
+        "mae_p95": 106.0,
+        "ssim": 0.3313762843608856,
+        "ssim_blur": 0.6178176999092102,
+        "deltaE2000_mean": 13.82724380493164,
+        "wasserstein_mean": 8.56284236907959,
+        "lpips": 0.4692862927913666
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 31.777816772460938,
+        "mae_p95": 101.0,
+        "ssim": 0.3302055299282074,
+        "ssim_blur": 0.629706621170044,
+        "deltaE2000_mean": 13.213727951049805,
+        "wasserstein_mean": 7.199601650238037,
+        "lpips": 0.4468420743942261
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 30.190053939819336,
+        "mae_p95": 97.0,
+        "ssim": 0.33228999376296997,
+        "ssim_blur": 0.6383324265480042,
+        "deltaE2000_mean": 12.66830062866211,
+        "wasserstein_mean": 6.291851997375488,
+        "lpips": 0.42863595485687256
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 28.66414451599121,
+        "mae_p95": 93.0,
+        "ssim": 0.34098172187805176,
+        "ssim_blur": 0.6496711373329163,
+        "deltaE2000_mean": 12.116934776306152,
+        "wasserstein_mean": 5.760392030080159,
+        "lpips": 0.40772131085395813
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 26.76472282409668,
+        "mae_p95": 88.0,
+        "ssim": 0.3572969138622284,
+        "ssim_blur": 0.6707490086555481,
+        "deltaE2000_mean": 11.413934707641602,
+        "wasserstein_mean": 5.401478926340739,
+        "lpips": 0.37799885869026184
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 24.780874252319336,
+        "mae_p95": 81.0,
+        "ssim": 0.37760281562805176,
+        "ssim_blur": 0.6944345831871033,
+        "deltaE2000_mean": 10.634923934936523,
+        "wasserstein_mean": 5.321554978688558,
+        "lpips": 0.34204569458961487
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 22.513702392578125,
+        "mae_p95": 74.0,
+        "ssim": 0.401775598526001,
+        "ssim_blur": 0.7240652441978455,
+        "deltaE2000_mean": 9.673076629638672,
+        "wasserstein_mean": 5.298764228820801,
+        "lpips": 0.29510989785194397
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 19.493741989135742,
+        "mae_p95": 66.0,
+        "ssim": 0.4432864189147949,
+        "ssim_blur": 0.7798919677734375,
+        "deltaE2000_mean": 8.372640609741211,
+        "wasserstein_mean": 5.2832099596659345,
+        "lpips": 0.23994727432727814
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 15.414307594299316,
+        "mae_p95": 54.0,
+        "ssim": 0.5116968750953674,
+        "ssim_blur": 0.8874710202217102,
+        "deltaE2000_mean": 6.607010364532471,
+        "wasserstein_mean": 5.267653147379558,
+        "lpips": 0.17206385731697083
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 6.764415264129639,
+        "mae_p95": 26.0,
+        "ssim": 0.9271643161773682,
+        "ssim_blur": 0.9758315086364746,
+        "deltaE2000_mean": 3.3136954307556152,
+        "wasserstein_mean": 5.262760003407796,
+        "lpips": 0.08885455131530762
+      }
+    ]
+  },
+  "field_loss": {
+    "filter": "field_loss",
+    "unity_ref": "fieldloss_default.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 1.0
+      },
+      "mae_mean": 3.670128583908081,
+      "mae_p95": 12.0,
+      "ssim": 0.949462890625,
+      "ssim_blur": 0.9889883399009705,
+      "deltaE2000_mean": 2.387735366821289,
+      "wasserstein_mean": 1.2415234247843425,
+      "lpips": 0.06170684099197388
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 4.517504692077637,
+        "mae_p95": 15.0,
+        "ssim": 0.9272596836090088,
+        "ssim_blur": 0.9802492260932922,
+        "deltaE2000_mean": 2.6811039447784424,
+        "wasserstein_mean": 1.694053332010905,
+        "lpips": 0.07533454895019531
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 4.442951679229736,
+        "mae_p95": 15.0,
+        "ssim": 0.9290657043457031,
+        "ssim_blur": 0.9803703427314758,
+        "deltaE2000_mean": 2.6576387882232666,
+        "wasserstein_mean": 1.6465648015340169,
+        "lpips": 0.07455895841121674
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 4.364071846008301,
+        "mae_p95": 15.0,
+        "ssim": 0.9307214617729187,
+        "ssim_blur": 0.9806082844734192,
+        "deltaE2000_mean": 2.632709503173828,
+        "wasserstein_mean": 1.5945717493693035,
+        "lpips": 0.07371976226568222
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 4.285475254058838,
+        "mae_p95": 14.0,
+        "ssim": 0.9324133992195129,
+        "ssim_blur": 0.98093181848526,
+        "deltaE2000_mean": 2.607250213623047,
+        "wasserstein_mean": 1.5450191497802734,
+        "lpips": 0.07296089082956314
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 4.198225498199463,
+        "mae_p95": 14.0,
+        "ssim": 0.9344350695610046,
+        "ssim_blur": 0.9815393090248108,
+        "deltaE2000_mean": 2.578346014022827,
+        "wasserstein_mean": 1.4924532572428386,
+        "lpips": 0.07184761017560959
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 4.107764720916748,
+        "mae_p95": 14.0,
+        "ssim": 0.9368026852607727,
+        "ssim_blur": 0.9823806285858154,
+        "deltaE2000_mean": 2.548025608062744,
+        "wasserstein_mean": 1.4415615399678547,
+        "lpips": 0.0706152468919754
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 4.007359981536865,
+        "mae_p95": 13.0,
+        "ssim": 0.9396440982818604,
+        "ssim_blur": 0.9836483001708984,
+        "deltaE2000_mean": 2.5130434036254883,
+        "wasserstein_mean": 1.3866267204284668,
+        "lpips": 0.06900691986083984
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 3.900832414627075,
+        "mae_p95": 13.0,
+        "ssim": 0.9429020881652832,
+        "ssim_blur": 0.9852261543273926,
+        "deltaE2000_mean": 2.4751760959625244,
+        "wasserstein_mean": 1.3313428560892742,
+        "lpips": 0.06700475513935089
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 3.7873268127441406,
+        "mae_p95": 13.0,
+        "ssim": 0.9462488293647766,
+        "ssim_blur": 0.9870588779449463,
+        "deltaE2000_mean": 2.4328105449676514,
+        "wasserstein_mean": 1.2824673652648926,
+        "lpips": 0.0644059032201767
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 3.670128583908081,
+        "mae_p95": 12.0,
+        "ssim": 0.949462890625,
+        "ssim_blur": 0.9889883399009705,
+        "deltaE2000_mean": 2.387735366821289,
+        "wasserstein_mean": 1.2415234247843425,
+        "lpips": 0.06170684099197388
+      }
+    ]
+  },
+  "flickering_stars": {
+    "filter": "flickering_stars",
+    "unity_ref": "flickeringstars.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "n_stars": 15,
+        "severity": 1.0
+      },
+      "mae_mean": 2.7312963008880615,
+      "mae_p95": 9.0,
+      "ssim": 0.96719890832901,
+      "ssim_blur": 0.997959315776825,
+      "deltaE2000_mean": 1.970857858657837,
+      "wasserstein_mean": 0.8037707010904948,
+      "lpips": 0.03177640959620476
+    },
+    "all": [
+      {
+        "params": {
+          "n_stars": 15,
+          "severity": 1.0
+        },
+        "mae_mean": 2.7312963008880615,
+        "mae_p95": 9.0,
+        "ssim": 0.96719890832901,
+        "ssim_blur": 0.997959315776825,
+        "deltaE2000_mean": 1.970857858657837,
+        "wasserstein_mean": 0.8037707010904948,
+        "lpips": 0.03177640959620476
+      }
+    ]
+  },
+  "floaters": {
+    "filter": "floaters",
+    "unity_ref": "floaters_dense.png",
+    "sweep_key": null,
+    "criterion": "ssim_blur",
+    "best": {
+      "params": {
+        "n_floaters": 50000,
+        "mode": "dark",
+        "floater_size": 1,
+        "circle_radius_uv": 0.146,
+        "severity": 1.0
+      },
+      "mae_mean": 6.385694980621338,
+      "mae_p95": 17.0,
+      "ssim": 0.7871675491333008,
+      "ssim_blur": 0.9903817176818848,
+      "deltaE2000_mean": 3.172597885131836,
+      "wasserstein_mean": 1.9040039380391438,
+      "lpips": 0.24227303266525269
+    },
+    "all": [
+      {
+        "params": {
+          "n_floaters": 50000,
+          "mode": "dark",
+          "floater_size": 1,
+          "circle_radius_uv": 0.146,
+          "severity": 1.0
+        },
+        "mae_mean": 6.385694980621338,
+        "mae_p95": 17.0,
+        "ssim": 0.7871675491333008,
+        "ssim_blur": 0.9903817176818848,
+        "deltaE2000_mean": 3.172597885131836,
+        "wasserstein_mean": 1.9040039380391438,
+        "lpips": 0.24227303266525269
+      }
+    ]
+  },
+  "foveal_darkness": {
+    "filter": "foveal_darkness",
+    "unity_ref": "fovealdarkness_max.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 1.0
+      },
+      "mae_mean": 6.152566432952881,
+      "mae_p95": 31.0,
+      "ssim": 0.923797607421875,
+      "ssim_blur": 0.9528096318244934,
+      "deltaE2000_mean": 2.9624838829040527,
+      "wasserstein_mean": 2.4242547353108725,
+      "lpips": 0.06472709029912949
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 9.382779121398926,
+        "mae_p95": 50.0,
+        "ssim": 0.9200074076652527,
+        "ssim_blur": 0.9483134746551514,
+        "deltaE2000_mean": 4.210887908935547,
+        "wasserstein_mean": 7.323220570882161,
+        "lpips": 0.07470530271530151
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 9.244126319885254,
+        "mae_p95": 50.0,
+        "ssim": 0.9200314879417419,
+        "ssim_blur": 0.9483358263969421,
+        "deltaE2000_mean": 4.154348850250244,
+        "wasserstein_mean": 7.18618647257487,
+        "lpips": 0.07456372678279877
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 9.002346992492676,
+        "mae_p95": 49.0,
+        "ssim": 0.9201601147651672,
+        "ssim_blur": 0.9484712481498718,
+        "deltaE2000_mean": 4.057255744934082,
+        "wasserstein_mean": 6.948660532633464,
+        "lpips": 0.07426632195711136
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 8.634086608886719,
+        "mae_p95": 47.0,
+        "ssim": 0.9205639958381653,
+        "ssim_blur": 0.9488749504089355,
+        "deltaE2000_mean": 3.913236141204834,
+        "wasserstein_mean": 6.585359255472819,
+        "lpips": 0.07377037405967712
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 8.131321907043457,
+        "mae_p95": 43.0,
+        "ssim": 0.9212093949317932,
+        "ssim_blur": 0.9495362639427185,
+        "deltaE2000_mean": 3.722520589828491,
+        "wasserstein_mean": 6.074729124704997,
+        "lpips": 0.07307713478803635
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 7.534259796142578,
+        "mae_p95": 38.0,
+        "ssim": 0.922074556350708,
+        "ssim_blur": 0.9504358172416687,
+        "deltaE2000_mean": 3.4989848136901855,
+        "wasserstein_mean": 5.3916401863098145,
+        "lpips": 0.0722116231918335
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 6.933368682861328,
+        "mae_p95": 33.0,
+        "ssim": 0.9230301976203918,
+        "ssim_blur": 0.9514649510383606,
+        "deltaE2000_mean": 3.272988796234131,
+        "wasserstein_mean": 4.52299435933431,
+        "lpips": 0.07112877070903778
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 6.441491603851318,
+        "mae_p95": 31.0,
+        "ssim": 0.9237315654754639,
+        "ssim_blur": 0.9522798657417297,
+        "deltaE2000_mean": 3.083981990814209,
+        "wasserstein_mean": 3.506281057993571,
+        "lpips": 0.0697263777256012
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 6.156195163726807,
+        "mae_p95": 29.0,
+        "ssim": 0.9236252307891846,
+        "ssim_blur": 0.9523482322692871,
+        "deltaE2000_mean": 2.9687769412994385,
+        "wasserstein_mean": 2.642595132191976,
+        "lpips": 0.0679955929517746
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 6.152566432952881,
+        "mae_p95": 31.0,
+        "ssim": 0.923797607421875,
+        "ssim_blur": 0.9528096318244934,
+        "deltaE2000_mean": 2.9624838829040527,
+        "wasserstein_mean": 2.4242547353108725,
+        "lpips": 0.06472709029912949
+      }
+    ]
+  },
+  "glitch": {
+    "filter": "glitch",
+    "unity_ref": "glitch_default.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 0.1
+      },
+      "mae_mean": 14.788528442382812,
+      "mae_p95": 73.0,
+      "ssim": 0.6018068194389343,
+      "ssim_blur": 0.8902834057807922,
+      "deltaE2000_mean": 11.167669296264648,
+      "wasserstein_mean": 0.7621288299560547,
+      "lpips": 0.3309592604637146
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 14.788528442382812,
+        "mae_p95": 73.0,
+        "ssim": 0.6018068194389343,
+        "ssim_blur": 0.8902834057807922,
+        "deltaE2000_mean": 11.167669296264648,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.3309592604637146
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 20.440502166748047,
+        "mae_p95": 95.0,
+        "ssim": 0.4882064759731293,
+        "ssim_blur": 0.7986230850219727,
+        "deltaE2000_mean": 14.215657234191895,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.4199017882347107
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 24.220535278320312,
+        "mae_p95": 106.0,
+        "ssim": 0.4341171085834503,
+        "ssim_blur": 0.7374429702758789,
+        "deltaE2000_mean": 16.14501953125,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.4762022793292999
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 27.265960693359375,
+        "mae_p95": 113.0,
+        "ssim": 0.394185334444046,
+        "ssim_blur": 0.6914427876472473,
+        "deltaE2000_mean": 17.620248794555664,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.5159286856651306
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 29.525672912597656,
+        "mae_p95": 117.0,
+        "ssim": 0.36944255232810974,
+        "ssim_blur": 0.6590442061424255,
+        "deltaE2000_mean": 18.652816772460938,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.5431100130081177
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 31.4556941986084,
+        "mae_p95": 120.0,
+        "ssim": 0.3496383726596832,
+        "ssim_blur": 0.6325542330741882,
+        "deltaE2000_mean": 19.49068832397461,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.5678566694259644
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 33.113216400146484,
+        "mae_p95": 122.0,
+        "ssim": 0.33293578028678894,
+        "ssim_blur": 0.610978364944458,
+        "deltaE2000_mean": 20.151992797851562,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.5845064520835876
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 34.55690002441406,
+        "mae_p95": 125.0,
+        "ssim": 0.3196776211261749,
+        "ssim_blur": 0.5926857590675354,
+        "deltaE2000_mean": 20.731884002685547,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.5982470512390137
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 35.70151138305664,
+        "mae_p95": 126.0,
+        "ssim": 0.3096635043621063,
+        "ssim_blur": 0.5794327855110168,
+        "deltaE2000_mean": 21.176239013671875,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.6089568138122559
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 36.74053955078125,
+        "mae_p95": 128.0,
+        "ssim": 0.30135753750801086,
+        "ssim_blur": 0.5676391124725342,
+        "deltaE2000_mean": 21.594837188720703,
+        "wasserstein_mean": 0.7621288299560547,
+        "lpips": 0.6188161969184875
+      }
+    ]
+  },
+  "led": {
+    "filter": "led",
+    "unity_ref": "led_default.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "scale": 80.0,
+        "brightness": 1.0,
+        "shape": 1.5,
+        "margin": 0.0,
+        "automatic_ratio": true
+      },
+      "mae_mean": 29.57444190979004,
+      "mae_p95": 110.0,
+      "ssim": 0.8065698742866516,
+      "ssim_blur": 0.7223389744758606,
+      "deltaE2000_mean": 11.930137634277344,
+      "wasserstein_mean": 2.3847357432047525,
+      "lpips": 0.12449456751346588
+    },
+    "all": [
+      {
+        "params": {
+          "scale": 80.0,
+          "brightness": 1.0,
+          "shape": 1.5,
+          "margin": 0.0,
+          "automatic_ratio": true
+        },
+        "mae_mean": 29.57444190979004,
+        "mae_p95": 110.0,
+        "ssim": 0.8065698742866516,
+        "ssim_blur": 0.7223389744758606,
+        "deltaE2000_mean": 11.930137634277344,
+        "wasserstein_mean": 2.3847357432047525,
+        "lpips": 0.12449456751346588
+      }
+    ]
+  },
+  "noise": {
+    "filter": "noise",
+    "unity_ref": "noise_int025.png",
+    "sweep_key": "severity",
+    "criterion": "ssim_blur",
+    "best": {
+      "params": {
+        "severity": 0.4
+      },
+      "mae_mean": 21.070295333862305,
+      "mae_p95": 47.0,
+      "ssim": 0.38211700320243835,
+      "ssim_blur": 0.9449520111083984,
+      "deltaE2000_mean": 7.270899295806885,
+      "wasserstein_mean": 13.83158508936564,
+      "lpips": 0.5883852243423462
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 13.358036994934082,
+        "mae_p95": 32.0,
+        "ssim": 0.7819761633872986,
+        "ssim_blur": 0.9437639117240906,
+        "deltaE2000_mean": 4.792217254638672,
+        "wasserstein_mean": 10.32370694478353,
+        "lpips": 0.1918591409921646
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 15.110871315002441,
+        "mae_p95": 36.0,
+        "ssim": 0.6013694405555725,
+        "ssim_blur": 0.9444573521614075,
+        "deltaE2000_mean": 5.378096580505371,
+        "wasserstein_mean": 11.115990479787191,
+        "lpips": 0.35269230604171753
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 17.79876708984375,
+        "mae_p95": 41.0,
+        "ssim": 0.47114646434783936,
+        "ssim_blur": 0.9448733925819397,
+        "deltaE2000_mean": 6.241589546203613,
+        "wasserstein_mean": 12.36147435506185,
+        "lpips": 0.483087420463562
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 21.070295333862305,
+        "mae_p95": 47.0,
+        "ssim": 0.38211700320243835,
+        "ssim_blur": 0.9449520111083984,
+        "deltaE2000_mean": 7.270899295806885,
+        "wasserstein_mean": 13.83158508936564,
+        "lpips": 0.5883852243423462
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 24.612594604492188,
+        "mae_p95": 53.0,
+        "ssim": 0.318444162607193,
+        "ssim_blur": 0.944658100605011,
+        "deltaE2000_mean": 8.381487846374512,
+        "wasserstein_mean": 15.443833351135254,
+        "lpips": 0.6813476085662842
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 28.28227424621582,
+        "mae_p95": 59.0,
+        "ssim": 0.2706555724143982,
+        "ssim_blur": 0.9439629912376404,
+        "deltaE2000_mean": 9.529354095458984,
+        "wasserstein_mean": 17.16961399714152,
+        "lpips": 0.7671040296554565
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 32.007869720458984,
+        "mae_p95": 66.0,
+        "ssim": 0.23344092071056366,
+        "ssim_blur": 0.9428645968437195,
+        "deltaE2000_mean": 10.691999435424805,
+        "wasserstein_mean": 18.98783254623413,
+        "lpips": 0.8465352654457092
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 35.74277877807617,
+        "mae_p95": 72.0,
+        "ssim": 0.20366930961608887,
+        "ssim_blur": 0.9413595795631409,
+        "deltaE2000_mean": 11.855171203613281,
+        "wasserstein_mean": 20.883042812347412,
+        "lpips": 0.9190028309822083
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 39.45853042602539,
+        "mae_p95": 78.0,
+        "ssim": 0.17933206260204315,
+        "ssim_blur": 0.9394626617431641,
+        "deltaE2000_mean": 13.008098602294922,
+        "wasserstein_mean": 22.84909502665202,
+        "lpips": 0.9839765429496765
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 43.13429641723633,
+        "mae_p95": 85.0,
+        "ssim": 0.15909887850284576,
+        "ssim_blur": 0.9371582865715027,
+        "deltaE2000_mean": 14.141477584838867,
+        "wasserstein_mean": 24.89048894246419,
+        "lpips": 1.0413693189620972
+      }
+    ]
+  },
+  "nystagmus": {
+    "filter": "nystagmus",
+    "unity_ref": "nystagmus_amp20.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 1.0
+      },
+      "mae_mean": 38.96921920776367,
+      "mae_p95": 112.0,
+      "ssim": 0.3148655593395233,
+      "ssim_blur": 0.6080073714256287,
+      "deltaE2000_mean": 15.950297355651855,
+      "wasserstein_mean": 13.214325904846191,
+      "lpips": 0.6706691980361938
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 38.96921920776367,
+        "mae_p95": 112.0,
+        "ssim": 0.3148655593395233,
+        "ssim_blur": 0.6080073714256287,
+        "deltaE2000_mean": 15.950297355651855,
+        "wasserstein_mean": 13.214325904846191,
+        "lpips": 0.6706691980361938
+      }
+    ]
+  },
+  "pixelation": {
+    "filter": "pixelation",
+    "unity_ref": "pixelation_default.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 0.1
+      },
+      "mae_mean": 2.5907809734344482,
+      "mae_p95": 9.0,
+      "ssim": 0.9645596146583557,
+      "ssim_blur": 0.998699963092804,
+      "deltaE2000_mean": 1.6744201183319092,
+      "wasserstein_mean": 0.7437856992085775,
+      "lpips": 0.05996856093406677
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 2.5907809734344482,
+        "mae_p95": 9.0,
+        "ssim": 0.9645596146583557,
+        "ssim_blur": 0.998699963092804,
+        "deltaE2000_mean": 1.6744201183319092,
+        "wasserstein_mean": 0.7437856992085775,
+        "lpips": 0.05996856093406677
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 2.8193960189819336,
+        "mae_p95": 10.0,
+        "ssim": 0.9584018588066101,
+        "ssim_blur": 0.9986171722412109,
+        "deltaE2000_mean": 1.7348363399505615,
+        "wasserstein_mean": 0.7937450408935547,
+        "lpips": 0.07799428701400757
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 3.241480588912964,
+        "mae_p95": 12.0,
+        "ssim": 0.946413516998291,
+        "ssim_blur": 0.9984068870544434,
+        "deltaE2000_mean": 1.8541991710662842,
+        "wasserstein_mean": 0.930016040802002,
+        "lpips": 0.10462918132543564
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 3.8780155181884766,
+        "mae_p95": 15.0,
+        "ssim": 0.927426815032959,
+        "ssim_blur": 0.9979302883148193,
+        "deltaE2000_mean": 2.044208288192749,
+        "wasserstein_mean": 1.2197211583455403,
+        "lpips": 0.13507789373397827
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 4.814870357513428,
+        "mae_p95": 18.0,
+        "ssim": 0.8967342376708984,
+        "ssim_blur": 0.9967653155326843,
+        "deltaE2000_mean": 2.3380987644195557,
+        "wasserstein_mean": 1.662938912709554,
+        "lpips": 0.18706095218658447
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 6.095621585845947,
+        "mae_p95": 23.0,
+        "ssim": 0.8513507843017578,
+        "ssim_blur": 0.9938334822654724,
+        "deltaE2000_mean": 2.7634923458099365,
+        "wasserstein_mean": 2.287313143412272,
+        "lpips": 0.25941720604896545
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 7.966813564300537,
+        "mae_p95": 30.0,
+        "ssim": 0.7833251357078552,
+        "ssim_blur": 0.9853188395500183,
+        "deltaE2000_mean": 3.4140219688415527,
+        "wasserstein_mean": 3.2382760047912598,
+        "lpips": 0.35801202058792114
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 10.826141357421875,
+        "mae_p95": 39.0,
+        "ssim": 0.6889166831970215,
+        "ssim_blur": 0.9587774276733398,
+        "deltaE2000_mean": 4.451154708862305,
+        "wasserstein_mean": 4.79674498240153,
+        "lpips": 0.49036353826522827
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 15.948390007019043,
+        "mae_p95": 53.0,
+        "ssim": 0.5753253102302551,
+        "ssim_blur": 0.8738670349121094,
+        "deltaE2000_mean": 6.393502235412598,
+        "wasserstein_mean": 7.959181149800618,
+        "lpips": 0.6588441133499146
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 31.05485725402832,
+        "mae_p95": 87.0,
+        "ssim": 0.4974641501903534,
+        "ssim_blur": 0.6883479952812195,
+        "deltaE2000_mean": 12.250937461853027,
+        "wasserstein_mean": 19.572967211405437,
+        "lpips": 0.8585900664329529
+      }
+    ]
+  },
+  "teichopsia": {
+    "filter": "teichopsia",
+    "unity_ref": "teichopsia_default.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 0.75,
+        "lum_contribution": 0.75
+      },
+      "mae_mean": 15.833430290222168,
+      "mae_p95": 59.0,
+      "ssim": 0.6386637687683105,
+      "ssim_blur": 0.9651277661323547,
+      "deltaE2000_mean": 9.198882102966309,
+      "wasserstein_mean": 2.5594118436177573,
+      "lpips": 0.2971046566963196
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.75,
+          "lum_contribution": 0.75
+        },
+        "mae_mean": 15.833430290222168,
+        "mae_p95": 59.0,
+        "ssim": 0.6386637687683105,
+        "ssim_blur": 0.9651277661323547,
+        "deltaE2000_mean": 9.198882102966309,
+        "wasserstein_mean": 2.5594118436177573,
+        "lpips": 0.2971046566963196
+      }
+    ]
+  },
+  "vortex": {
+    "filter": "vortex",
+    "unity_ref": "vortex_default.png",
+    "sweep_key": "severity",
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "severity": 0.5
+      },
+      "mae_mean": 4.9794182777404785,
+      "mae_p95": 17.0,
+      "ssim": 0.9056205153465271,
+      "ssim_blur": 0.9722001552581787,
+      "deltaE2000_mean": 2.7809903621673584,
+      "wasserstein_mean": 0.7492000261942545,
+      "lpips": 0.05485989898443222
+    },
+    "all": [
+      {
+        "params": {
+          "severity": 0.1
+        },
+        "mae_mean": 6.4371256828308105,
+        "mae_p95": 25.0,
+        "ssim": 0.900479793548584,
+        "ssim_blur": 0.9496844410896301,
+        "deltaE2000_mean": 3.3899357318878174,
+        "wasserstein_mean": 0.755370299021403,
+        "lpips": 0.07814715057611465
+      },
+      {
+        "params": {
+          "severity": 0.2
+        },
+        "mae_mean": 6.349746227264404,
+        "mae_p95": 25.0,
+        "ssim": 0.900913417339325,
+        "ssim_blur": 0.9507042765617371,
+        "deltaE2000_mean": 3.3527169227600098,
+        "wasserstein_mean": 0.7531418800354004,
+        "lpips": 0.07716910541057587
+      },
+      {
+        "params": {
+          "severity": 0.3
+        },
+        "mae_mean": 6.1663432121276855,
+        "mae_p95": 23.0,
+        "ssim": 0.9015873074531555,
+        "ssim_blur": 0.9520687460899353,
+        "deltaE2000_mean": 3.2729504108428955,
+        "wasserstein_mean": 0.7489933967590332,
+        "lpips": 0.07390758395195007
+      },
+      {
+        "params": {
+          "severity": 0.4
+        },
+        "mae_mean": 5.818843841552734,
+        "mae_p95": 21.0,
+        "ssim": 0.90391606092453,
+        "ssim_blur": 0.95570307970047,
+        "deltaE2000_mean": 3.132528305053711,
+        "wasserstein_mean": 0.7519906361897787,
+        "lpips": 0.06757092475891113
+      },
+      {
+        "params": {
+          "severity": 0.5
+        },
+        "mae_mean": 4.9794182777404785,
+        "mae_p95": 17.0,
+        "ssim": 0.9056205153465271,
+        "ssim_blur": 0.9722001552581787,
+        "deltaE2000_mean": 2.7809903621673584,
+        "wasserstein_mean": 0.7492000261942545,
+        "lpips": 0.05485989898443222
+      },
+      {
+        "params": {
+          "severity": 0.6
+        },
+        "mae_mean": 7.0171427726745605,
+        "mae_p95": 34.0,
+        "ssim": 0.873858630657196,
+        "ssim_blur": 0.9421966075897217,
+        "deltaE2000_mean": 3.5630855560302734,
+        "wasserstein_mean": 0.7822732925415039,
+        "lpips": 0.0859338715672493
+      },
+      {
+        "params": {
+          "severity": 0.7
+        },
+        "mae_mean": 9.61205768585205,
+        "mae_p95": 60.0,
+        "ssim": 0.8388826847076416,
+        "ssim_blur": 0.9134231209754944,
+        "deltaE2000_mean": 4.558539390563965,
+        "wasserstein_mean": 0.9266737302144369,
+        "lpips": 0.12223929166793823
+      },
+      {
+        "params": {
+          "severity": 0.8
+        },
+        "mae_mean": 12.363781929016113,
+        "mae_p95": 81.0,
+        "ssim": 0.8024263381958008,
+        "ssim_blur": 0.8857467770576477,
+        "deltaE2000_mean": 5.643435478210449,
+        "wasserstein_mean": 1.0345786412556965,
+        "lpips": 0.16000914573669434
+      },
+      {
+        "params": {
+          "severity": 0.9
+        },
+        "mae_mean": 15.443341255187988,
+        "mae_p95": 97.0,
+        "ssim": 0.7584322094917297,
+        "ssim_blur": 0.8574543595314026,
+        "deltaE2000_mean": 6.843508720397949,
+        "wasserstein_mean": 1.2063585917154949,
+        "lpips": 0.2023637294769287
+      },
+      {
+        "params": {
+          "severity": 1.0
+        },
+        "mae_mean": 18.535202026367188,
+        "mae_p95": 105.0,
+        "ssim": 0.7094475626945496,
+        "ssim_blur": 0.8268511891365051,
+        "deltaE2000_mean": 8.049104690551758,
+        "wasserstein_mean": 1.671852429707845,
+        "lpips": 0.249644935131073
+      }
+    ]
+  },
+  "wiggle": {
+    "filter": "wiggle",
+    "unity_ref": "wiggle_amp03.png",
+    "sweep_key": "timer",
+    "criterion": "ssim_blur",
+    "best": {
+      "params": {
+        "freq": 12.0,
+        "amplitude": 0.03,
+        "severity": 1.0,
+        "mode": "complex",
+        "timer": 2.0
+      },
+      "mae_mean": 26.114639282226562,
+      "mae_p95": 107.0,
+      "ssim": 0.3744209110736847,
+      "ssim_blur": 0.7035210132598877,
+      "deltaE2000_mean": 10.389297485351562,
+      "wasserstein_mean": 0.8052128156026205,
+      "lpips": 0.2959336042404175
+    },
+    "all": [
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 0.5
+        },
+        "mae_mean": 27.158926010131836,
+        "mae_p95": 109.0,
+        "ssim": 0.36731040477752686,
+        "ssim_blur": 0.6867052912712097,
+        "deltaE2000_mean": 10.93680191040039,
+        "wasserstein_mean": 0.7159663836161295,
+        "lpips": 0.3168986439704895
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 1.0
+        },
+        "mae_mean": 26.948705673217773,
+        "mae_p95": 109.0,
+        "ssim": 0.3718814551830292,
+        "ssim_blur": 0.6931567192077637,
+        "deltaE2000_mean": 10.773500442504883,
+        "wasserstein_mean": 0.7759404182434082,
+        "lpips": 0.31247758865356445
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 1.5
+        },
+        "mae_mean": 28.030973434448242,
+        "mae_p95": 111.0,
+        "ssim": 0.3438072204589844,
+        "ssim_blur": 0.6651875376701355,
+        "deltaE2000_mean": 11.201586723327637,
+        "wasserstein_mean": 0.9788664182027181,
+        "lpips": 0.31707528233528137
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 2.0
+        },
+        "mae_mean": 26.114639282226562,
+        "mae_p95": 107.0,
+        "ssim": 0.3744209110736847,
+        "ssim_blur": 0.7035210132598877,
+        "deltaE2000_mean": 10.389297485351562,
+        "wasserstein_mean": 0.8052128156026205,
+        "lpips": 0.2959336042404175
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 2.5
+        },
+        "mae_mean": 26.401397705078125,
+        "mae_p95": 107.0,
+        "ssim": 0.36111021041870117,
+        "ssim_blur": 0.694693386554718,
+        "deltaE2000_mean": 10.522411346435547,
+        "wasserstein_mean": 0.7609992027282715,
+        "lpips": 0.2955608665943146
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 3.0
+        },
+        "mae_mean": 26.968887329101562,
+        "mae_p95": 109.0,
+        "ssim": 0.3652075529098511,
+        "ssim_blur": 0.6859488487243652,
+        "deltaE2000_mean": 10.857267379760742,
+        "wasserstein_mean": 0.716705322265625,
+        "lpips": 0.31210193037986755
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 3.5
+        },
+        "mae_mean": 26.737882614135742,
+        "mae_p95": 109.0,
+        "ssim": 0.3847655951976776,
+        "ssim_blur": 0.6946609616279602,
+        "deltaE2000_mean": 10.718917846679688,
+        "wasserstein_mean": 0.8119972546895345,
+        "lpips": 0.3129388988018036
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 4.0
+        },
+        "mae_mean": 27.99041175842285,
+        "mae_p95": 111.0,
+        "ssim": 0.34657779335975647,
+        "ssim_blur": 0.6674385666847229,
+        "deltaE2000_mean": 11.200645446777344,
+        "wasserstein_mean": 0.9679714838663737,
+        "lpips": 0.3148403763771057
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 4.5
+        },
+        "mae_mean": 26.838058471679688,
+        "mae_p95": 108.0,
+        "ssim": 0.3576277792453766,
+        "ssim_blur": 0.6886486411094666,
+        "deltaE2000_mean": 10.679628372192383,
+        "wasserstein_mean": 0.7937833468119303,
+        "lpips": 0.30161407589912415
+      },
+      {
+        "params": {
+          "freq": 12.0,
+          "amplitude": 0.03,
+          "severity": 1.0,
+          "mode": "complex",
+          "timer": 5.0
+        },
+        "mae_mean": 26.242324829101562,
+        "mae_p95": 107.0,
+        "ssim": 0.3645052909851074,
+        "ssim_blur": 0.6994193196296692,
+        "deltaE2000_mean": 10.432229995727539,
+        "wasserstein_mean": 0.8229576746622721,
+        "lpips": 0.2929697036743164
+      }
+    ]
+  },
+  "bcg": {
+    "filter": "bcg",
+    "unity_ref": "bcg_b-25_c25.png",
+    "sweep_key": null,
+    "criterion": "mae_mean",
+    "best": {
+      "params": {
+        "brightness": 0.75,
+        "contrast": 1.25,
+        "gamma": 1.0
+      },
+      "mae_mean": 3.4222519397735596,
+      "mae_p95": 15.0,
+      "ssim": 0.9457350373268127,
+      "ssim_blur": 0.9972469210624695,
+      "deltaE2000_mean": 2.5791282653808594,
+      "wasserstein_mean": 1.1616803805033367,
+      "lpips": 0.032822273671627045
+    },
+    "all": [
+      {
+        "params": {
+          "brightness": 0.75,
+          "contrast": 1.25,
+          "gamma": 1.0
+        },
+        "mae_mean": 3.4222519397735596,
+        "mae_p95": 15.0,
+        "ssim": 0.9457350373268127,
+        "ssim_blur": 0.9972469210624695,
+        "deltaE2000_mean": 2.5791282653808594,
+        "wasserstein_mean": 1.1616803805033367,
+        "lpips": 0.032822273671627045
+      }
+    ]
+  }
+}
