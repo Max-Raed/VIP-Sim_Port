@@ -1,0 +1,5 @@
+filter,gpu_kwargs,mae_mean,ssim,ssim_blur
+cvd,"{""severity"": 0.6}",0.542,0.9992,0.9999
+bcg,"{""brightness"": 0.75, ""contrast"": 1.25, ""gamma"": 1.0}",0.41,0.9993,0.9999
+blur,"{""severity"": 0.4}",0.455,0.9973,0.9997
+vortex,"{""severity"": 0.5}",54.945,0.2399,0.4796
