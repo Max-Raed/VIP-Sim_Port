@@ -229,89 +229,89 @@ For flickering_stars the image is one representative frame from the burst captur
 #### Method A filters (algorithmic proof, image is sanity check)
 
 ##### bcg
-![bcg](../abs_diff_out/unityVSpython/stacked/bcg_stacked.png)
+![bcg](/abs_diff_out/unityVSpython/stacked/bcg_stacked.png)
 
 ##### cvd (deuteranopia)
-![cvd](../abs_diff_out/unityVSpython/stacked/cvd_stacked.png)
+![cvd](/abs_diff_out/unityVSpython/stacked/cvd_stacked.png)
 
 ##### field_loss
-![field_loss](../abs_diff_out/unityVSpython/stacked/field_loss_stacked.png)
+![field_loss](/abs_diff_out/unityVSpython/stacked/field_loss_stacked.png)
 
 #### Method B passes (SSIM_blur ≥ 0.90)
 
 ##### blur
-![blur](../abs_diff_out/unityVSpython/stacked/blur_stacked.png)
+![blur](/abs_diff_out/unityVSpython/stacked/blur_stacked.png)
 
 ##### bloom
-![bloom](../abs_diff_out/unityVSpython/stacked/bloom_stacked.png)
+![bloom](/abs_diff_out/unityVSpython/stacked/bloom_stacked.png)
 
 ##### cataracts
-![cataracts](../abs_diff_out/unityVSpython/stacked/cataracts_stacked.png)
+![cataracts](/abs_diff_out/unityVSpython/stacked/cataracts_stacked.png)
 
 ##### distortion
-![distortion](../abs_diff_out/unityVSpython/stacked/distortion_stacked.png)
+![distortion](/abs_diff_out/unityVSpython/stacked/distortion_stacked.png)
 
 ##### double_vision
-![double_vision](../abs_diff_out/unityVSpython/stacked/double_vision_stacked.png)
+![double_vision](/abs_diff_out/unityVSpython/stacked/double_vision_stacked.png)
 
 ##### flickering_stars (burst frame 029 of 30)
-![flickering_stars](../abs_diff_out/flickeringstars_burst/compare/frame_029.png)
+![flickering_stars](/abs_diff_out/flickeringstars_burst/compare/frame_029.png)
 
 Six evenly-spaced frames from the 30-frame burst (Unity top, Python bottom in each cell):
 
-![flickering_stars grid](../abs_diff_out/flickeringstars_burst/grid.png)
+![flickering_stars grid](/abs_diff_out/flickeringstars_burst/grid.png)
 
 Animated loop of all 30 frames:
 
-![flickering_stars loop](../abs_diff_out/flickeringstars_burst/loop.gif)
+![flickering_stars loop](/abs_diff_out/flickeringstars_burst/loop.gif)
 
 ##### floaters
-![floaters](../abs_diff_out/unityVSpython/stacked/floaters_stacked.png)
+![floaters](/abs_diff_out/unityVSpython/stacked/floaters_stacked.png)
 
 ##### foveal_darkness
-![foveal_darkness](../abs_diff_out/unityVSpython/stacked/foveal_darkness_stacked.png)
+![foveal_darkness](/abs_diff_out/unityVSpython/stacked/foveal_darkness_stacked.png)
 
 ##### noise
-![noise](../abs_diff_out/unityVSpython/stacked/noise_stacked.png)
+![noise](/abs_diff_out/unityVSpython/stacked/noise_stacked.png)
 
 ##### pixelation
-![pixelation](../abs_diff_out/unityVSpython/stacked/pixelation_stacked.png)
+![pixelation](/abs_diff_out/unityVSpython/stacked/pixelation_stacked.png)
 
 ##### teichopsia
-![teichopsia](../abs_diff_out/unityVSpython/stacked/teichopsia_stacked.png)
+![teichopsia](/abs_diff_out/unityVSpython/stacked/teichopsia_stacked.png)
 
 ##### vortex
-![vortex](../abs_diff_out/unityVSpython/stacked/vortex_stacked.png)
+![vortex](/abs_diff_out/unityVSpython/stacked/vortex_stacked.png)
 
 ##### wiggle (burst frame 015 of 30)
-![wiggle](../abs_diff_out/wiggle_burst/compare/frame_015.png)
+![wiggle](/abs_diff_out/wiggle_burst/compare/frame_015.png)
 
 Six evenly-spaced frames from the 30-frame burst (Unity top, Python bottom in each cell):
 
-![wiggle grid](../abs_diff_out/wiggle_burst/grid.png)
+![wiggle grid](/abs_diff_out/wiggle_burst/grid.png)
 
 Animated loop of all 30 frames:
 
-![wiggle loop](../abs_diff_out/wiggle_burst/loop.gif)
+![wiggle loop](/abs_diff_out/wiggle_burst/loop.gif)
 
 ##### nystagmus (burst frame 001 of 30, saccade peak at shift = 7.34°)
-![nystagmus](../abs_diff_out/nystagmus_burst/compare/frame_001.png)
+![nystagmus](/abs_diff_out/nystagmus_burst/compare/frame_001.png)
 
 Six evenly-spaced frames from the 30-frame burst (Unity top, Python bottom in each cell):
 
-![nystagmus grid](../abs_diff_out/nystagmus_burst/grid.png)
+![nystagmus grid](/abs_diff_out/nystagmus_burst/grid.png)
 
 Animated loop of all 30 frames:
 
-![nystagmus loop](../abs_diff_out/nystagmus_burst/loop.gif)
+![nystagmus loop](/abs_diff_out/nystagmus_burst/loop.gif)
 
 #### Dropped or marginal
 
 ##### glitch (dropped, SSIM_blur 0.89, just below threshold, non-deterministic)
-![glitch](../abs_diff_out/unityVSpython/stacked/glitch_stacked.png)
+![glitch](/abs_diff_out/unityVSpython/stacked/glitch_stacked.png)
 
 ##### led (marginal, cell-phase tuning pending)
-![led](../abs_diff_out/unityVSpython/stacked/led_stacked.png)
+![led](/abs_diff_out/unityVSpython/stacked/led_stacked.png)
 
 ### 4.6 Burst-frame protocol (for time-varying filters)
 
