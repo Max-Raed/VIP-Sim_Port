@@ -1,0 +1,50 @@
+{
+  "id": "p5",
+  "version": "v2-table4-draft",
+  "caveat": "Saved from the tuner as a variant of p5. Merge the winner into the base profile, then delete.",
+  "description": "Near-blind. Table 4 = Detail Loss only (Nystagmus is 'o'). Hard mosaic, no feather. Old p5 was already close; drops the small stand-in blur.",
+  "table4_mapping": [
+    {
+      "shader": "Detail Loss",
+      "symbol": "*",
+      "our_filter": "pixelation(hard)+detail_loss",
+      "note": "blocky mosaic"
+    }
+  ],
+  "excluded_shaders": [
+    "Nystagmus (o)"
+  ],
+  "removed_from_v1": [],
+  "capability_gaps": [],
+  "values_are_starting_points": true,
+  "filters": [
+    {
+      "filter": "pixelation",
+      "pixel_size": 160,
+      "hard": true,
+      "sampling": "point"
+    },
+    {
+      "filter": "blur",
+      "severity": 0.19
+    },
+    {
+      "filter": "detail_loss",
+      "severity": 0.17
+    },
+    {
+      "filter": "bcg",
+      "brightness": 1,
+      "contrast": 1.05,
+      "gamma": 1,
+      "saturation": 1.25
+    }
+  ],
+  "panel_crop": [
+    446,
+    508,
+    892,
+    762
+  ],
+  "renamed_from": "p5b"
+}

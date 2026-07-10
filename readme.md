@@ -39,6 +39,10 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 | `vipsim_filters.py` | CPU reference implementation — 20 filters, 25 presets, and a CLI. The source of truth for behavior. |
 | `vipsim_gpu.py` | PyTorch port operating on batched, channels-first tensors `[N, 3, H, W]`. Includes a Gym/MyoSuite observation wrapper. |
 | `vipsim_equivalence_report.md` | The validation document: how the Python port is shown to reproduce the Unity shaders, with methods, metrics, and results. |
+| `vipsim_profiles_v2/` | The 7 validated VIP-Sim participant profiles as filter stacks (`p1-p7.json`), calibrated against the paper's Figure-6 panels, with side-by-side renders. |
+| `validation_scripts/profile_tuner.py` | Interactive browser tuner (localhost:8765): live sliders for every parameter, similarity scoring vs a reference, auto-tune, and a generated `/docs` page. |
+| `validation_scripts/render_profiles_v2.py` | Regenerates the paper-vs-ours comparison renders for the profiles. |
+| `filter_documentation.html` | Plain-language documentation of every filter and parameter (static export of the tuner's `/docs` page). |
 
 ## 🚀 Quick start
 
@@ -158,6 +162,29 @@ Presets bundle one or more filters under a recognizable name. A selection:
 | `nystagmus_motion` / `floaters` / `visual_noise` | Motion blur, floaters, visual snow |
 
 Run `python vipsim_filters.py --list-presets` for the full set of 25 with descriptions.
+
+## 🧑‍🤝‍🧑 Participant profiles (`vipsim_profiles_v2/`)
+
+The VIP-Sim paper validated its shader stacks with 7 low-vision participants
+(Table 4) and shows the same street scene through each participant's eyes
+(Figure 6). This repo carries recreations of those 7 profiles as filter stacks:
+one filter per validated shader, calibrated against clean extractions of the
+Figure-6 panels. Each `pN.json` documents its Table-4 mapping and carries the
+stack itself; `renders/` holds paper-vs-ours comparisons. Similarity vs the
+paper panels (mean of SSIM, pixel, and CIEDE2000 color): 81 to 98 percent.
+
+Tune or inspect them interactively:
+
+```bash
+pip install scipy scikit-image      # tuner extras
+python validation_scripts/profile_tuner.py    # then open http://localhost:8765
+```
+
+The tuner shows the reference next to a live render, scores the similarity as
+you drag sliders, and can auto-tune all numeric values (coordinate descent).
+Every filter and parameter is explained in plain language at `/docs` (also
+exported as `filter_documentation.html`). Steps may carry `"_disabled": true`
+to switch them off without deleting them; all scripts in this repo honor that.
 
 ## 🔬 Under the hood (GPU port)
 

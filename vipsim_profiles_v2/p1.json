@@ -1,0 +1,139 @@
+{
+  "id": "p1",
+  "version": "v2-table4-draft",
+  "caveat": "EXPERIMENTAL copy of p1 (2026-07-08): localized left-edge waves, elongated banner, translucent eye dot. Merge into p1.json when approved, then delete.",
+  "description": "AMD. Table 4 gives P1 a full stack, not just a swirl: a localized metamorphopsia warp PLUS blur, colour, contrast, glare and a foveal scotoma. Our old p1 was vortex-only.",
+  "table4_mapping": [
+    {
+      "shader": "Distortion",
+      "symbol": "*",
+      "our_filter": "distortion",
+      "note": "global wavy warp"
+    },
+    {
+      "shader": "Metamorphosia point",
+      "symbol": "-",
+      "our_filter": "vortex",
+      "note": "localized swirl (keeps P1's identity)"
+    },
+    {
+      "shader": "Vision loss central",
+      "symbol": "-",
+      "our_filter": "field_loss(central)",
+      "note": ""
+    },
+    {
+      "shader": "Hyperopia",
+      "symbol": "X",
+      "our_filter": "blur",
+      "note": "light uniform defocus"
+    },
+    {
+      "shader": "Color vision deficiency",
+      "symbol": "-",
+      "our_filter": "cvd",
+      "note": ""
+    },
+    {
+      "shader": "Contrast Sensitivity",
+      "symbol": "X",
+      "our_filter": "bcg",
+      "note": ""
+    },
+    {
+      "shader": "Glare vision",
+      "symbol": "-",
+      "our_filter": "bloom",
+      "note": ""
+    },
+    {
+      "shader": "Foveal Darkness",
+      "symbol": "*",
+      "our_filter": "foveal_darkness",
+      "note": "gray, small, semi-transparent per meeting"
+    }
+  ],
+  "excluded_shaders": [],
+  "removed_from_v1": [],
+  "capability_gaps": [
+    "In-Filling (-): no filter exists in vipsim_filters.py. Capability gap for P1."
+  ],
+  "values_are_starting_points": true,
+  "filters": [
+    {
+      "filter": "distortion",
+      "severity": 0.08
+    },
+    {
+      "filter": "vortex",
+      "severity": 0.55,
+      "center": [
+        0.5,
+        0.61
+      ],
+      "vortex_radius": 0.33,
+      "suction_strength": 2,
+      "fade_width": 0,
+      "swirl_strength": -0.05,
+      "radius_y": 0.18,
+      "inner_circle_radius": 0.006,
+      "inner_color": 1,
+      "inner_center": [
+        0.494,
+        0.549
+      ],
+      "inner_fade": 0,
+      "inner_opacity": 1,
+      "halo_radius": 0.004,
+      "halo_thickness": 0.03,
+      "halo_color": 1,
+      "halo_opacity": 0.68,
+      "halo_center": [
+        0.506,
+        0.61
+      ]
+    },
+    {
+      "filter": "field_loss",
+      "severity": 0.06,
+      "field_type": "central",
+      "overlay_scale": 1.8
+    },
+    {
+      "filter": "blur",
+      "severity": 0.008
+    },
+    {
+      "filter": "cvd",
+      "cvd_type": "deuteranomaly",
+      "severity": 0.15
+    },
+    {
+      "filter": "bcg",
+      "brightness": 1.02,
+      "contrast": 1,
+      "gamma": 1
+    },
+    {
+      "filter": "bloom",
+      "severity": 0.05
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0.04,
+      "center": [
+        0.53,
+        0.61
+      ],
+      "radius_x": 0.02,
+      "radius_y": 0.09
+    }
+  ],
+  "panel_crop": [
+    446,
+    0,
+    892,
+    254
+  ],
+  "renamed_from": "p1b"
+}

@@ -1,0 +1,169 @@
+{
+  "id": "p4",
+  "version": "v2-table4-draft",
+  "caveat": "EXPERIMENTAL clone of p4b (2026-07-09) + user tone tuning + eased desaturation for the cones.",
+  "description": "Drusen, foveal loss. Big multi-symptom stack. REMOVES two wrong extras from old p4 (cvd + bloom are NOT in P4's list) and adds the distortion/floater/star family. Many are '!' (validated from memory) so evidence is softer.",
+  "table4_mapping": [
+    {
+      "shader": "Metamorphosia overlay",
+      "symbol": "-/!",
+      "our_filter": "distortion",
+      "note": ""
+    },
+    {
+      "shader": "Metamorphosia point",
+      "symbol": "!",
+      "our_filter": "vortex",
+      "note": ""
+    },
+    {
+      "shader": "Nystagmus",
+      "symbol": "!",
+      "our_filter": "nystagmus",
+      "note": "'!' here (not 'o'), so included"
+    },
+    {
+      "shader": "Vision loss central",
+      "symbol": "X",
+      "our_filter": "field_loss(central)",
+      "note": ""
+    },
+    {
+      "shader": "Hyperopia",
+      "symbol": "X",
+      "our_filter": "blur",
+      "note": ""
+    },
+    {
+      "shader": "Contrast Sensitivity",
+      "symbol": "X",
+      "our_filter": "bcg",
+      "note": ""
+    },
+    {
+      "shader": "Cataracts",
+      "symbol": "-",
+      "our_filter": "cataracts",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Foveal Darkness",
+      "symbol": "X",
+      "our_filter": "foveal_darkness",
+      "note": "dark scotoma: make gray, smaller, 2 ovals"
+    },
+    {
+      "shader": "Retinopathy / Floaters",
+      "symbol": "!",
+      "our_filter": "floaters",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Teichopsia",
+      "symbol": "!",
+      "our_filter": "teichopsia",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Flickering Stars",
+      "symbol": "*",
+      "our_filter": "flickering_stars",
+      "note": "ADDED"
+    }
+  ],
+  "excluded_shaders": [],
+  "removed_from_v1": [
+    "cvd (not in P4's Table-4 list)",
+    "bloom/glare (not in P4's list)"
+  ],
+  "capability_gaps": [],
+  "values_are_starting_points": true,
+  "filters": [
+    {
+      "filter": "distortion",
+      "severity": 0
+    },
+    {
+      "filter": "nystagmus",
+      "severity": 0.06,
+      "axis": "horizontal"
+    },
+    {
+      "filter": "blur",
+      "severity": 0.05187
+    },
+    {
+      "filter": "bcg",
+      "brightness": 1.0875,
+      "contrast": 0.2415,
+      "gamma": 1,
+      "saturation": 0.41612499999999997
+    },
+    {
+      "filter": "bcg",
+      "brightness": 1,
+      "contrast": 1.091,
+      "gamma": 1.94
+    },
+    {
+      "filter": "bloom",
+      "severity": 0.5,
+      "threshold": 0.22999999999999998,
+      "intensity": 1.3050156249999998,
+      "blur_size": 1
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0.092,
+      "center": [
+        0.5471749999999999,
+        0.695
+      ],
+      "radius_x": 0.2254,
+      "radius_y": 0.24700000000000003,
+      "edge_width": 0.42000000000000004,
+      "mode": "light"
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0.48999999999999994,
+      "center": [
+        0.52,
+        0.69
+      ],
+      "radius_x": 0.19425,
+      "radius_y": 0.12319125,
+      "edge_width": 0.23775
+    },
+    {
+      "filter": "field_loss",
+      "severity": 0.82,
+      "field_type": "central",
+      "mask_center": [
+        0.52,
+        0.69
+      ],
+      "overlay_scale": 1.275
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0,
+      "center": [
+        0.75,
+        0.35
+      ],
+      "radius_x": 0.95,
+      "radius_y": 1.05,
+      "edge_width": 0.25,
+      "mode": "desat",
+      "invert": true
+    }
+  ],
+  "panel_crop": [
+    1338,
+    254,
+    1784,
+    508
+  ],
+  "renamed_from": "p4c"
+}

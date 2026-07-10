@@ -101,8 +101,11 @@ def apply_profile(img: Image.Image, profile: dict) -> Image.Image:
     """Apply a profile's filter chain to img."""
     result = img
     for step in profile["filters"]:
+        if step.get("_disabled"):
+            continue
         name = step["filter"]
-        kwargs = {k: v for k, v in step.items() if k != "filter"}
+        kwargs = {k: v for k, v in step.items()
+                  if k != "filter" and not k.startswith("_")}
         fn = vf._FILTER_DISPATCH[name]
         result = fn(result, **kwargs)
     return result

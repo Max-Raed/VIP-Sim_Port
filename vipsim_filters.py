@@ -142,8 +142,10 @@ def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
 # Brightness / Contrast / Gamma (from myBrightnessContrastGamma.shader)
 # =============================================================================
 
-def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, gamma: float = 1.0) -> Image.Image:
-    """Apply brightness, contrast, and gamma adjustment.
+def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, gamma: float = 1.0,
+              saturation: float = 1.0,
+              color_space: str = "linear") -> Image.Image:
+    """Apply brightness, contrast, gamma and (extension) saturation.
 
     Matches the VIP-Sim shader formula (executed in linear colour space, as
     Unity does when the project Color Space is Linear):
@@ -156,9 +158,20 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
         brightness: Multiplier (1.0 = no change, <1 darker, >1 brighter).
         contrast: Multiplier (1.0 = no change, <1 less contrast, >1 more contrast).
         gamma: Exponent (1.0 = no change, >1 darker midtones, <1 lighter midtones).
+        saturation: 1.0 = no change, 0.0 = full greyscale, >1 more vivid.
+            NOT in the Unity shader (extension for profile matching): blends
+            each pixel toward its luminance, so colors drain without touching
+            tone/contrast. Applied after the b/c/g chain, in the same space.
+        color_space: "linear" (default, faithful to a Linear-space Unity
+            project) or "srgb" — run the same formula directly on the encoded
+            sRGB values, as Unity would in a Gamma-space project. In sRGB
+            space the identical contrast value desaturates far more
+            aggressively and treats highlights differently; kept as an option
+            because the original VIP-Sim project's colour-space setting is
+            unconfirmed.
     """
     srgb = np.asarray(img, dtype=np.float32) / 255.0
-    arr = _srgb_to_linear(srgb)
+    arr = srgb if color_space == "srgb" else _srgb_to_linear(srgb)
 
     # Brightness
     arr = arr * brightness
@@ -170,7 +183,13 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
     if gamma != 1.0:
         arr = np.power(arr, gamma)
 
-    out = _linear_to_srgb(np.clip(arr, 0.0, 1.0))
+    arr = np.clip(arr, 0.0, 1.0)
+    # Saturation (extension): lerp toward per-pixel luminance
+    if saturation != 1.0:
+        lum = (arr @ np.array([0.2126, 0.7152, 0.0722],
+                              dtype=np.float32))[..., None]
+        arr = np.clip(lum + (arr - lum) * saturation, 0.0, 1.0)
+    out = arr if color_space == "srgb" else _linear_to_srgb(arr)
     return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
 
 
@@ -529,7 +548,9 @@ def _load_macular_overlay(h: int, w: int, field_type: str = "central",
 def apply_field_loss(img: Image.Image, severity: float = 0.5,
                       field_type: str = "central",
                       overlay_scale: float = 0.75,
-                      use_overlay_asset: bool = True) -> Image.Image:
+                      use_overlay_asset: bool = True,
+                      mask_center=None,
+                      mask_radius: float = None) -> Image.Image:
     """Field-loss simulation via per-pixel mip-level selection.
 
     Source: `myFieldLoss.cs` + `myFieldLoss.shader` (CC BY 4.0).
@@ -546,6 +567,13 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
         use_overlay_asset: If True, try to load the VIP-Sim overlay JPG
             (`vipsim_assets/macular-degeneration.jpg`); falls back to a
             radial mask if missing. Set False to force the radial mask.
+        mask_center: Optional (cy, cx) in normalised coords. When given, the
+            radial mask is used (overlay asset skipped) and centred there —
+            lets the blur region follow a repositioned scotoma. Default None
+            keeps the original behaviour exactly.
+        mask_radius: Optional direct radius of the radial mask (fraction of
+            image, ~0.05..0.7). Overrides the 0.45/overlay_scale mapping;
+            None keeps the original behaviour.
     """
     severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0:
@@ -561,14 +589,16 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
 
     # Try the real Unity overlay first; fall back to a radial mask
     mask = None
-    if use_overlay_asset:
+    if use_overlay_asset and mask_center is None:
         mask = _load_macular_overlay(h, w, field_type=field_type,
                                        overlay_scale=overlay_scale)
     if mask is None:
         # Fallback: generic radial mask (Phase-1 substitute)
-        mask_radius = 0.45 / max(overlay_scale, 0.1)
+        r = (mask_radius if mask_radius is not None
+             else 0.45 / max(overlay_scale, 0.1))
         mask = _radial_weight_mask(h, w, kind=field_type,
-                                    radius=min(mask_radius, 0.7))
+                                    center=mask_center or (0.5, 0.5),
+                                    radius=min(r, 0.7))
     # Severity scales the maximum mip level effectively reached
     w_scaled = mask * severity
 
@@ -858,8 +888,11 @@ def apply_detail_loss(img: Image.Image, severity: float = 0.5) -> Image.Image:
 # subsumed by BILINEAR downsample.
 
 def apply_pixelation(img: Image.Image, severity: float = 0.5,
-                      pixel_size: float = None) -> Image.Image:
-    """Soft-bilinear pixelation — faithful port of PixelationEffect.shader.
+                      pixel_size: float = None, hard: bool = False,
+                      sampling: str = "average",
+                      grid_offset_x: float = 0.0,
+                      grid_offset_y: float = 0.0) -> Image.Image:
+    """Pixelation / mosaic downsampling.
 
     Unity: `_PixelSize = 1000 - pixelRadius` cells across (default 990 →
     barely visible). The shader downsamples to that grid then bilinearly
@@ -868,8 +901,24 @@ def apply_pixelation(img: Image.Image, severity: float = 0.5,
     Args:
         severity: 0..1 — if `pixel_size` is None, maps to cells-across
             1000..20 (high sev = blockier).
-        pixel_size: Override — cells across the image (Unity's `_PixelSize`).
+        pixel_size: Override — cells across the WIDTH (Unity's `_PixelSize`).
             Unity default 990 (pixelRadius=10).
+        hard: If True, upscale with NEAREST-neighbour so the blocks have HARD
+            square edges (true mosaic / detail loss); if False (default), the
+            faithful soft-bilinear shader look. Blocks are kept ~square by
+            deriving the vertical cell count from the aspect ratio.
+        sampling: "average" (default) box-averages all pixels in a cell —
+            partially-covered cells turn muddy. "point" reads ONE source
+            point per cell like the Unity shader's tex2D lookup: cells
+            snap to a single local color, so high-contrast features (e.g.
+            crosswalk stripes) become bold solid chunks that can fuse into
+            L-shapes with their neighbours.
+        grid_offset_x / grid_offset_y: 0..1 — shifts the block grid by that
+            fraction of a cell, so the mosaic boundaries can be aligned with
+            a reference image without moving the content. 0 = the grid starts
+            at the image origin (previous behaviour). Implemented by edge-pad
+            shifting the image, pixelating, and shifting back, so the outer
+            ring of blocks samples replicated border pixels.
     """
     severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0 and pixel_size is None:
@@ -879,11 +928,33 @@ def apply_pixelation(img: Image.Image, severity: float = 0.5,
     pixel_size = max(2.0, float(pixel_size))
 
     w, h = img.size
-    # Downsample to (pixel_size × pixel_size) — non-square cells like the shader
-    cells = max(2, int(round(pixel_size)))
-    small = img.resize((cells, cells), Image.BILINEAR)
-    # Bilinear back up so adjacent cells blend (matches shader's manual lerp)
-    return small.resize((w, h), Image.BILINEAR)
+    cells_x = max(2, int(round(pixel_size)))
+    cells_y = max(2, int(round(cells_x * h / w))) if hard else cells_x
+    ox = float(grid_offset_x) % 1.0
+    oy = float(grid_offset_y) % 1.0
+    dx = int(round(ox * (w / cells_x)))
+    dy = int(round(oy * (h / cells_y)))
+    if dx or dy:
+        arr = np.asarray(img)
+        arr = np.pad(arr, ((dy, 0), (dx, 0)) + ((0, 0),) * (arr.ndim - 2),
+                     mode="edge")[:h, :w]
+        img = Image.fromarray(arr)
+
+    down = Image.NEAREST if sampling == "point" else Image.BILINEAR
+    if hard:
+        small = img.resize((cells_x, cells_y), down)
+        out = small.resize((w, h), Image.NEAREST)  # HARD square blocks
+    else:
+        # Faithful shader look: square grid + bilinear up (soft blocks).
+        small = img.resize((cells_x, cells_x), down)
+        out = small.resize((w, h), Image.BILINEAR)
+
+    if dx or dy:  # shift the content back; the grid keeps the offset
+        arr = np.asarray(out)
+        arr = np.pad(arr, ((0, dy), (0, dx)) + ((0, 0),) * (arr.ndim - 2),
+                     mode="edge")[dy:dy + h, dx:dx + w]
+        out = Image.fromarray(arr)
+    return out
 
 
 # -- LED grid ----------------------------------------------------------------
@@ -967,8 +1038,21 @@ def apply_led(img: Image.Image, severity: float = 0.5,
 def apply_vortex(img: Image.Image, severity: float = 0.5,
                   center=(0.5, 0.5),
                   vortex_radius: float = None,
+                  radius_y: float = None,
+                  radius_y_down: float = None,
                   suction_strength: float = None,
+                  falloff_exponent: float = 2.0,
+                  swirl_strength: float = 0.0,
                   inner_circle_radius: float = 0.01,
+                  inner_color: float = 0.5,
+                  inner_center=None,
+                  inner_fade: float = None,
+                  inner_opacity: float = 1.0,
+                  halo_radius: float = 0.0,
+                  halo_center=None,
+                  halo_thickness: float = 0.012,
+                  halo_color: float = 1.0,
+                  halo_opacity: float = 0.5,
                   noise_amount: float = 0.05,
                   noise_scale: float = 10.0,
                   fade_width: float = 0.05) -> Image.Image:
@@ -989,8 +1073,41 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
             If `suction_strength` is None, maps to strength 0.2..2.0.
         center: (cy, cx) gaze point in normalised UV.
         vortex_radius: Override — fraction of image diagonal-ish (Unity 0.27).
+        radius_y: Vertical semi-axis (same units as vortex_radius, 1.0 = image
+            height). Makes the field elliptical (e.g. wide-but-flat so a broad
+            band is affected without reaching floors above/below). None keeps
+            the original circular field. NOT in the Unity shader (extension
+            for profile matching); content-agnostic, transfers to any image.
+        radius_y_down: Optional separate vertical reach for the LOWER half
+            of the field; `radius_y` then only governs the upper half.
         suction_strength: Override — Unity default 1.0.
+        falloff_exponent: Steepness of the pull's decay toward the rim.
+            2.0 reproduces the Unity shader exactly; lower values keep
+            more pull near the rim (same zero boundary at the radius).
+        swirl_strength: Angular rotation (radians) added on top of the radial
+            pinch, peaking at the center and decaying quadratically to 0 at
+            `vortex_radius`. NOT in the Unity shader (extension for profile
+            matching); default 0.0 keeps the original pure-suction behaviour.
         inner_circle_radius: Tiny grey core (Unity default 0.01).
+        inner_color: Grey level of that core, 0..1. Unity blends to
+            mid-grey (0.5); 1.0 gives the bright 'eye' dot seen in some
+            reference renders.
+        inner_center: Optional (cy, cx) position of the core dot; None
+            keeps it at the vortex center (Unity behaviour). The dot is
+            clipped to the vortex field, so keep it inside the radius.
+        inner_fade: Edge softness of the dot alone; None inherits
+            `fade_width` (Unity behaviour).
+        inner_opacity: 0..1 blend of the dot over the vortexed image;
+            1.0 = solid (Unity behaviour), lower = translucent.
+        halo_radius: Radius of a luminous orb. 0 disables it (Unity
+            behaviour). Fully bright inside this radius, then fades
+            softly outward (no visible structure inside the orb).
+        halo_center: Optional (cy, cx) position of the orb; None uses
+            the core dot's center (which itself defaults to the vortex
+            center). Lets dot and halo sit at different spots.
+        halo_thickness: Gaussian width of the outward glow falloff.
+        halo_color: Grey level of the orb, 0..1.
+        halo_opacity: 0..1 peak translucency of the orb.
         noise_amount: Edge-wobble magnitude (Unity default 0.05).
         noise_scale: Noise grid frequency (Unity default 10).
         fade_width: Outer smoothstep width (Unity shader default 0.05).
@@ -1016,8 +1133,17 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
     adj_y = yy
     adj_cx = cx * aspect
     adj_cy = cy
+    # Elliptical field: stretch y so the ellipse becomes a circle of radius
+    # `vortex_radius` in the working space; sampling positions are unstretched
+    # on the way back out. `radius_y_down` allows an asymmetric vertical
+    # reach (upper vs lower half of the field).
+    ys_up = vortex_radius / max(radius_y, 1e-6) if radius_y else 1.0
+    ys_dn = (vortex_radius / max(radius_y_down, 1e-6)
+             if radius_y_down else ys_up)
     dx = adj_x - adj_cx
-    dy = adj_y - adj_cy
+    dy_raw = adj_y - adj_cy
+    ys = np.where(dy_raw < 0, ys_up, ys_dn)
+    dy = dy_raw * ys
     dist = np.sqrt(dx * dx + dy * dy)
 
     # Value-noise grid (matches the shader's rand/lerp construction)
@@ -1052,17 +1178,33 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
 
         # Radial suction: sample further out
         d_over_R = np.clip(dist_n / max(vortex_radius, eps), 0.0, 1.0)
-        adj_suction = suction_strength * (1.0 - d_over_R)
-        r_sample = dist_n * (1.0 + adj_suction * (1.0 - d_over_R))
+        r_sample = dist_n * (1.0 + suction_strength
+                             * (1.0 - d_over_R) ** falloff_exponent)
+
+        # Swirl: rotate the sample angle, strongest at center, 0 at the rim
+        if swirl_strength:
+            angle = angle + swirl_strength * (1.0 - d_over_R) ** 2
 
         sample_x = adj_cx + r_sample * np.cos(angle)
-        sample_y = adj_cy + r_sample * np.sin(angle)
+        sin_a = np.sin(angle)
+        ys_back = np.where(sin_a < 0, ys_up, ys_dn)
+        sample_y = adj_cy + r_sample * sin_a / ys_back
         sample_x = sample_x / aspect  # undo aspect correction
         sample_x = np.clip(sample_x, 0.0, 1.0)
         sample_y = np.clip(sample_y, 0.0, 1.0)
-        sx = (sample_x * (w - 1)).astype(np.int32)
-        sy = (sample_y * (h - 1)).astype(np.int32)
-        vortexed = arr[sy, sx]
+        # Bilinear sampling (Unity tex2D is bilinear; nearest-neighbour
+        # shreds strong stretches into aliased filaments)
+        fx = sample_x * (w - 1)
+        fy = sample_y * (h - 1)
+        x0 = np.floor(fx).astype(np.int32)
+        y0 = np.floor(fy).astype(np.int32)
+        x1 = np.minimum(x0 + 1, w - 1)
+        y1 = np.minimum(y0 + 1, h - 1)
+        wx = (fx - x0)[..., None]
+        wy = (fy - y0)[..., None]
+        top = arr[y0, x0] * (1.0 - wx) + arr[y0, x1] * wx
+        bot = arr[y1, x0] * (1.0 - wx) + arr[y1, x1] * wx
+        vortexed = top * (1.0 - wy) + bot * wy
 
         # Outer fade back to source (smoothstep R-fade..R)
         t_out = np.clip((dist_n - (vortex_radius - fade_width))
@@ -1070,16 +1212,45 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
         s_out = t_out * t_out * (3.0 - 2.0 * t_out)
         blended = vortexed * (1.0 - s_out[..., None]) + arr * s_out[..., None]
 
-        # Inner grey core
+        # Inner core dot (grey in Unity; position/brightness/softness/opacity
+        # configurable — only rendered inside the vortex field)
+        has_halo = halo_radius > 0 and halo_opacity > 0
+        if inner_circle_radius > 0 or has_halo:
+            if inner_center is not None:
+                icy, icx = inner_center
+                idx = adj_x - icx * aspect
+                idy = adj_y - icy
+                idist = np.sqrt(idx * idx + idy * idy)
+            else:
+                idist = dist_n
+
         if inner_circle_radius > 0:
-            grey = np.full_like(arr, 0.5)
-            t_in = np.clip((dist_n - (inner_circle_radius - fade_width))
-                            / max(fade_width, eps), 0.0, 1.0)
+            i_fade = fade_width if inner_fade is None else inner_fade
+            grey = np.full_like(arr, inner_color)
+            t_in = np.clip((idist - (inner_circle_radius - i_fade))
+                            / max(i_fade, eps), 0.0, 1.0)
             s_in = t_in * t_in * (3.0 - 2.0 * t_in)
-            inner_blend = grey * (1.0 - s_in[..., None]) + blended * s_in[..., None]
-            blended = np.where(
-                (dist_n < inner_circle_radius)[..., None], inner_blend, blended
-            )
+            alpha = (1.0 - s_in)[..., None] * inner_opacity
+            alpha = np.where((idist < inner_circle_radius)[..., None], alpha, 0.0)
+            blended = grey * alpha + blended * (1.0 - alpha)
+
+        # Halo: luminous orb (solid glow inside halo_radius, Gaussian
+        # falloff outward); own center if given
+        if has_halo:
+            if halo_center is not None:
+                hcy, hcx = halo_center
+                hdx = adj_x - hcx * aspect
+                hdy = adj_y - hcy
+                hdist = np.sqrt(hdx * hdx + hdy * hdy)
+            else:
+                hdist = idist
+            band = np.where(
+                hdist <= halo_radius, 1.0,
+                np.exp(-0.5 * ((hdist - halo_radius)
+                               / max(halo_thickness, eps)) ** 2))
+            h_alpha = band[..., None] * halo_opacity
+            halo_col = np.full_like(arr, halo_color)
+            blended = halo_col * h_alpha + blended * (1.0 - h_alpha)
 
         out = np.where(inside[..., None], blended, arr)
 
@@ -1343,14 +1514,53 @@ def apply_teichopsia(img: Image.Image, severity: float = 0.75,
 # location (we fix to image center).
 
 def apply_foveal_darkness(img: Image.Image, severity: float = 0.5,
-                            center=(0.5, 0.5), radius: float = None) -> Image.Image:
-    """Central dark spot with smoothstep edge (gaze-fixed)."""
+                            center=(0.5, 0.5), radius: float = None,
+                            radius_x: float = None,
+                            radius_y: float = None,
+                            edge_width: float = None,
+                            mode: str = "dark",
+                            invert: bool = False,
+                            band_width: float = None) -> Image.Image:
+    """Central dark spot with smoothstep edge (gaze-fixed).
+
+    `radius` is in NORMALISED units (fraction of each axis: radius 0.2 =>
+    the darkened ellipse spans ~0.4 of the width AND ~0.4 of the height).
+    Because the image is usually wider than tall, a single radius renders as a
+    horizontal oval in pixels. Pass `radius_x` / `radius_y` to size the two
+    axes independently (fractions of width / height respectively) — e.g.
+    radius_x=0.15, radius_y=0.20 gives a compact oval ~30% wide x ~40% tall.
+
+    `edge_width` (0..1, optional): fraction of the radius used as the edge
+    feather. Default None keeps the original profile (smoothstep across the
+    FULL radius: darkest at center, fading continuously). With e.g. 0.3 the
+    interior is a flat plateau at full severity and only the outer 30% of the
+    ellipse feathers to 0 — a uniform semi-transparent patch with a defined
+    boundary rather than a center-peaked cloud.
+
+    `mode`: "dark" (default) blends toward black — the original behaviour.
+    "light" blends toward white instead (whitish veil / halo ellipse).
+    "desat" drains color toward per-pixel grey (luminance) — a localized
+    desaturation ellipse; combine with `invert` to grey a corner/edge.
+
+    `invert` (default False): apply the effect OUTSIDE the ellipse instead
+    of inside — e.g. mode='light' + invert gives a peripheral white glow
+    ring/veil that fades in across the edge feather. False keeps the
+    original behaviour exactly.
+
+    `band_width` (only with invert, default None): limit the inverted
+    effect to a BAND just outside the ellipse. Units are fractions of the
+    radius: 0.5 means the effect dies out again by 1.5x the radius, so the
+    far corners return to untouched. None = the inverted effect extends
+    all the way out (previous behaviour).
+    """
     severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0:
         return img.copy()
 
     if radius is None:
         radius = 0.05 + severity * 0.20
+    rx = radius_x if radius_x is not None else radius
+    ry = radius_y if radius_y is not None else radius
 
     arr = np.asarray(img.convert("RGB"), dtype=np.float32)
     h, w = arr.shape[:2]
@@ -1358,13 +1568,27 @@ def apply_foveal_darkness(img: Image.Image, severity: float = 0.5,
     ys = np.arange(h, dtype=np.float32) / max(h - 1, 1) - cy
     xs = np.arange(w, dtype=np.float32) / max(w - 1, 1) - cx
     yy, xx = np.meshgrid(ys, xs, indexing="ij")
-    dist = np.sqrt(xx * xx + yy * yy)
+    # Elliptical normalised distance: 1.0 exactly on the ellipse boundary.
+    t_raw = np.sqrt((xx / max(rx, 1e-6)) ** 2 + (yy / max(ry, 1e-6)) ** 2)
+    t = np.clip(t_raw, 0.0, 1.0)
+    if edge_width is not None:
+        e = float(np.clip(edge_width, 1e-3, 1.0))
+        u = np.clip((t - (1.0 - e)) / e, 0.0, 1.0)  # 0 inside plateau, 1 at rim
+        s = u * u * (3.0 - 2.0 * u)
+    else:
+        s = t * t * (3.0 - 2.0 * t)  # smoothstep
+    darken = (s if invert else (1.0 - s)) * severity
+    if invert and band_width:
+        u2 = np.clip((t_raw - 1.0) / max(band_width, 1e-6), 0.0, 1.0)
+        darken = darken * (1.0 - u2 * u2 * (3.0 - 2.0 * u2))
 
-    t = np.clip(dist / max(radius, 1e-6), 0.0, 1.0)
-    s = t * t * (3.0 - 2.0 * t)  # smoothstep
-    darken = (1.0 - s) * severity  # 1 at center, 0 outside radius
-
-    out = arr * (1.0 - darken[..., None])
+    if mode == "desat":
+        lum = arr @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+        out = arr + (lum[..., None] - arr) * darken[..., None]
+    elif mode == "light":
+        out = arr + (255.0 - arr) * darken[..., None]
+    else:
+        out = arr * (1.0 - darken[..., None])
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
@@ -1446,28 +1670,57 @@ def apply_flickering_stars(img: Image.Image, severity: float = 0.5,
 def apply_floaters(img: Image.Image, severity: float = 0.5,
                      n_floaters: int = None, mode: str = "dark",
                      floater_size: int = 1, circle_radius_uv: float = 0.146,
-                     seed: int = 0) -> Image.Image:
-    """Vitreous floaters: many tiny grain dots, dense central disc + soft
-    falloff + 1% noise everywhere — faithful port of Unity's IsInsideCircle.
+                     seed: int = 0, distribution: str = "disc",
+                     center=(0.5, 0.5), spread: float = 0.16,
+                     spread_x: float = None, spread_y: float = None,
+                     size_variance: bool = False,
+                     dot_brightness: float = None,
+                     angle: float = 0.0,
+                     region=None,
+                     region_feather: float = 0.02,
+                     region_center_bias: float = 0.0) -> Image.Image:
+    """Vitreous floaters: many tiny grain dots clustered over the image.
 
-    Source: `myFloaters.cs` (CC BY 4.0). Unity samples candidate positions
-    uniformly in a 1024² overlay and accepts via three zones:
-      - d ≤ R  : accept (P=1.0)
-      - R < d ≤ 2R : P = 0.01 + 0.99·(1 − (d−R)/R)  (soft falloff)
-      - d > 2R : P = 0.01  (1% noise everywhere)
-    where R = circleRadius (default 150). The 1024² overlay is then stretched
-    onto the screen UVs, so on a 2048×1024 screen the disc becomes a 2:1
-    ellipse. We mirror that here by sampling in Unity's overlay space and
-    mapping to screen coords.
+    Source: `myFloaters.cs` (CC BY 4.0).
+
+    Two spatial distributions:
+      - "disc" (default, faithful Unity port): uniform sampling accepted via
+        IsInsideCircle's 3 zones — dense disc + soft falloff + 1% noise
+        EVERYWHERE (so some specks land full-frame).
+      - "gaussian": a 2-D Gaussian-weighted spray — highest density at `center`,
+        decaying with `spread` (std as a fraction of the overlay), and NO
+        uniform background noise, so the periphery thins out. Reads as a
+        concentrated central BURST rather than full-frame grain.
 
     Args:
-        img: Input PIL Image (RGB).
         severity: 0..1. Scales number of floaters and per-pixel alpha.
         n_floaters: explicit count override. Default = severity * 50000.
         mode: "dark" (black spots) or "light" (white spots).
-        floater_size: pixel size of each speck in overlay space (Unity=1).
-        circle_radius_uv: disc radius as fraction of overlay size (Unity
-            150/1024 ≈ 0.146).
+        floater_size: base speck size in overlay (1024²) px (Unity=1).
+        circle_radius_uv: disc radius as fraction of overlay ("disc" mode).
+        distribution: "disc" or "gaussian".
+        center: (cy, cx) cluster centre in normalised [0,1] ("gaussian" mode).
+        spread: Gaussian std as a fraction of the overlay ("gaussian" mode).
+        spread_x, spread_y: override the horizontal / vertical std separately
+            (fraction of overlay). E.g. spread_x < spread_y gives a tall
+            vertical PLUME rather than a round/horizontal cluster.
+        size_variance: if True, mix larger blobs among the fine specks.
+        dot_brightness: grey level of the dots, 0..1. Default None keeps
+            the Unity behaviour (pure white in 'light' mode, pure black in
+            'dark' mode); e.g. 0.85 gives softer off-white specks.
+        angle: rotation of the gaussian ellipse in degrees (0 = spread_x
+            horizontal / spread_y vertical; positive tilts clockwise).
+            Only affects 'gaussian' distribution.
+        region: optional polygon [[y, x], ...] in normalised coords. When
+            given it OVERRIDES `distribution`: dots are scattered uniformly
+            inside the polygon (a hand-drawn cluster shape). This is a
+            visual-field shape (like center/spread), so it transfers to
+            arbitrary images.
+        region_feather: soft edge of the region mask (fraction of overlay;
+            0 = hard boundary).
+        region_center_bias: 0 = dots spread evenly across the region
+            (uniform); toward 1 = dots concentrate around the region's
+            middle, thinning out toward its outline (dense-core look).
         seed: RNG seed.
     """
     severity = float(np.clip(severity, 0.0, 1.0))
@@ -1486,64 +1739,187 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
 
     # Unity samples in a 1024² overlay; we replicate then stretch to screen.
     overlay_size = 1024.0
-    cx_o = cy_o = overlay_size * 0.5
-    r_o = circle_radius_uv * overlay_size  # ≈ 150 by default
-
-    # Vectorised rejection sampling per IsInsideCircle's 3-zone acceptance.
-    pts_x = []
-    pts_y = []
     target = n_floaters
-    while len(pts_x) < target:
-        batch = max(target * 2, 4096)
-        cxs = rng.uniform(0.0, overlay_size, size=batch)
-        cys = rng.uniform(0.0, overlay_size, size=batch)
-        d = np.hypot(cxs - cx_o, cys - cy_o)
-        # Outside-disc soft falloff: 1 at d=R, 0 at d>=2R.
-        falloff = np.clip(1.0 - (d - r_o) / r_o, 0.0, 1.0)
-        # Combined acceptance: inside disc → 1; outside → 0.01 + 0.99·falloff.
-        accept_p = np.where(d <= r_o, 1.0, 0.01 + 0.99 * falloff)
-        keep = rng.random(batch) < accept_p
-        pts_x.extend(cxs[keep].tolist())
-        pts_y.extend(cys[keep].tolist())
 
-    pts_x = np.asarray(pts_x[:target], dtype=np.float64)
-    pts_y = np.asarray(pts_y[:target], dtype=np.float64)
+    region_mask = None
+    if region is not None and len(region) >= 3:
+        from PIL import ImageDraw, ImageFilter
+        m = Image.new("L", (int(overlay_size), int(overlay_size)), 0)
+        poly = [(float(x) * overlay_size, float(y) * overlay_size)
+                for y, x in region]
+        ImageDraw.Draw(m).polygon(poly, fill=255)
+        if region_feather:
+            m = m.filter(ImageFilter.GaussianBlur(region_feather * overlay_size))
+        region_mask = np.asarray(m, np.float32) / 255.0
+        if region_mask.max() <= 0:
+            region_mask = None  # degenerate polygon: fall back
+        elif region_center_bias > 0:
+            ys_m, xs_m = np.nonzero(region_mask > 0.05)
+            cy_m, cx_m = ys_m.mean(), xs_m.mean()
+            gy, gx = np.mgrid[0:region_mask.shape[0], 0:region_mask.shape[1]]
+            dist_c = np.hypot(gy - cy_m, gx - cx_m)
+            dmax = max(dist_c[region_mask > 0.05].max(), 1.0)
+            falloff = np.clip(1.0 - dist_c / dmax, 0.0, 1.0) \
+                ** (1.0 + 5.0 * float(np.clip(region_center_bias, 0, 1)))
+            region_mask = region_mask * falloff
+            region_mask /= max(region_mask.max(), 1e-6)
+
+    if region_mask is not None:
+        pts_x, pts_y = [], []
+        ov = int(overlay_size)
+        for _ in range(200):
+            if len(pts_x) >= target:
+                break
+            n = max((target - len(pts_x)) * 3, 1024)
+            bx = rng.uniform(0.0, overlay_size, n)
+            by = rng.uniform(0.0, overlay_size, n)
+            pa = region_mask[np.clip(by.astype(int), 0, ov - 1),
+                             np.clip(bx.astype(int), 0, ov - 1)]
+            keep = rng.random(n) < pa
+            pts_x.extend(bx[keep].tolist())
+            pts_y.extend(by[keep].tolist())
+        pts_x = np.asarray(pts_x[:target], dtype=np.float64)
+        pts_y = np.asarray(pts_y[:target], dtype=np.float64)
+        target = len(pts_x)
+    elif distribution == "uniform":
+        # Even scatter across the WHOLE frame (denser toward the periphery
+        # relative to a centre-gaussian) — stray floaters everywhere.
+        pts_x = rng.uniform(0.0, overlay_size, size=target)
+        pts_y = rng.uniform(0.0, overlay_size, size=target)
+    elif distribution == "gaussian":
+        # 2-D Gaussian spray centred at `center`, std = `spread` of overlay.
+        # Reject out-of-bounds samples (keeps the periphery thin, no edge pile).
+        cyN, cxN = center
+        mu_x = cxN * overlay_size
+        mu_y = cyN * overlay_size
+        sigma_x = max(1.0, (spread_x if spread_x is not None else spread) * overlay_size)
+        sigma_y = max(1.0, (spread_y if spread_y is not None else spread) * overlay_size)
+        rad = np.deg2rad(angle)
+        cos_a, sin_a = np.cos(rad), np.sin(rad)
+        pts_x, pts_y = [], []
+        while len(pts_x) < target:
+            n = (target - len(pts_x)) * 2
+            dx = rng.normal(0.0, sigma_x, n)
+            dy = rng.normal(0.0, sigma_y, n)
+            bx = mu_x + dx * cos_a - dy * sin_a
+            by = mu_y + dx * sin_a + dy * cos_a
+            ok = (bx >= 0) & (bx < overlay_size) & (by >= 0) & (by < overlay_size)
+            pts_x.extend(bx[ok].tolist())
+            pts_y.extend(by[ok].tolist())
+        pts_x = np.asarray(pts_x[:target], dtype=np.float64)
+        pts_y = np.asarray(pts_y[:target], dtype=np.float64)
+    else:
+        # Faithful disc rejection sampling (3-zone IsInsideCircle).
+        cx_o = cy_o = overlay_size * 0.5
+        r_o = circle_radius_uv * overlay_size
+        pts_x, pts_y = [], []
+        while len(pts_x) < target:
+            batch = max(target * 2, 4096)
+            cxs = rng.uniform(0.0, overlay_size, size=batch)
+            cys = rng.uniform(0.0, overlay_size, size=batch)
+            d = np.hypot(cxs - cx_o, cys - cy_o)
+            falloff = np.clip(1.0 - (d - r_o) / r_o, 0.0, 1.0)
+            accept_p = np.where(d <= r_o, 1.0, 0.01 + 0.99 * falloff)
+            keep = rng.random(batch) < accept_p
+            pts_x.extend(cxs[keep].tolist())
+            pts_y.extend(cys[keep].tolist())
+        pts_x = np.asarray(pts_x[:target], dtype=np.float64)
+        pts_y = np.asarray(pts_y[:target], dtype=np.float64)
 
     # Map overlay coords → screen pixel coords.
-    sx_f = pts_x * (w / overlay_size)
-    sy_f = pts_y * (h / overlay_size)
-    xs = np.clip(sx_f.astype(int), 0, w - 1)
-    ys = np.clip(sy_f.astype(int), 0, h - 1)
+    xs = np.clip((pts_x * (w / overlay_size)).astype(int), 0, w - 1)
+    ys = np.clip((pts_y * (h / overlay_size)).astype(int), 0, h - 1)
+
+    # Per-floater size: constant, or a weighted mix (mostly fine, some blobs).
+    if size_variance:
+        pool = np.array([1, 1, 1, 1, 2, 2, 3, floater_size + 2, floater_size + 4])
+        sizes = rng.choice(pool, size=target)
+    else:
+        sizes = np.full(target, floater_size, dtype=int)
 
     out = arr.copy()
-    target_val = 0.0 if mode == "dark" else 255.0
-    alpha = severity  # per-pixel blend strength
-
-    if floater_size <= 1:
-        # Single-pixel specks (Unity default). Use np.add.at to handle
-        # duplicate (y,x) indices correctly (no double-blend overshoot —
-        # last-write-wins via direct assignment is fine here since alpha is
-        # constant; we just want the binary 'pixel touched' look).
-        for c in range(3):
-            out[ys, xs, c] = arr[ys, xs, c] * (1.0 - alpha) + target_val * alpha
+    if dot_brightness is not None:
+        target_val = float(np.clip(dot_brightness, 0.0, 1.0)) * 255.0
     else:
-        # Small blob ≥ 2 px. Random per-pixel mask inside the box mimics
-        # Unity's `Mathf.PerlinNoise(...) > 0.5` per-subpixel gating. Box size
-        # is measured in overlay px, so scale to screen.
-        s_screen_x = max(1, int(round(floater_size * w / overlay_size)))
-        s_screen_y = max(1, int(round(floater_size * h / overlay_size)))
-        half_x, half_y = s_screen_x // 2, s_screen_y // 2
-        for sx, sy in zip(xs, ys):
-            x0, x1 = max(0, sx - half_x), min(w, sx + half_x + 1)
-            y0, y1 = max(0, sy - half_y), min(h, sy + half_y + 1)
-            if x1 <= x0 or y1 <= y0:
-                continue
-            mask = rng.random((y1 - y0, x1 - x0)) > 0.5
-            for c in range(3):
-                tile = out[y0:y1, x0:x1, c]
-                tile[mask] = tile[mask] * (1.0 - alpha) + target_val * alpha
-                out[y0:y1, x0:x1, c] = tile
+        target_val = 0.0 if mode == "dark" else 255.0
+    alpha = severity
+
+    # Fast path: single-pixel specks (size <= 1) painted vectorised.
+    small = sizes <= 1
+    if np.any(small):
+        smx, smy = xs[small], ys[small]
+        for c in range(3):
+            out[smy, smx, c] = arr[smy, smx, c] * (1.0 - alpha) + target_val * alpha
+
+    # Larger blobs painted individually with a random sub-pixel mask.
+    for sx, sy, sz in zip(xs[~small], ys[~small], sizes[~small]):
+        s_x = max(1, int(round(sz * w / overlay_size)))
+        s_y = max(1, int(round(sz * h / overlay_size)))
+        hx, hy = s_x // 2, s_y // 2
+        x0, x1 = max(0, sx - hx), min(w, sx + hx + 1)
+        y0, y1 = max(0, sy - hy), min(h, sy + hy + 1)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        mask = rng.random((y1 - y0, x1 - x0)) > 0.4
+        for c in range(3):
+            tile = out[y0:y1, x0:x1, c]
+            tile[mask] = tile[mask] * (1.0 - alpha) + target_val * alpha
+            out[y0:y1, x0:x1, c] = tile
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+# =============================================================================
+# Vignette — peripheral darkening (tunnel-vision / peripheral field loss)
+# =============================================================================
+# Not a distinct VIP-Sim shader, but the "Vision loss, peripheral" percept
+# (glaucoma / retinitis-pigmentosa tunnel vision) darkens the periphery in
+# addition to the mip-blur that apply_field_loss(peripheral) already provides.
+# This multiplies a radial darkening mask: ~1 in the centre, falling to
+# (1 - strength) toward the corners via a smoothstep beyond `radius`.
+
+def apply_vignette(img: Image.Image, severity: float = 0.5,
+                    strength: float = None, radius: float = 0.5,
+                    softness: float = 0.5, mode: str = "dark") -> Image.Image:
+    """Radial peripheral shading (vignette).
+
+    `mode="dark"` darkens the periphery (tunnel-vision, e.g. glaucoma).
+    `mode="light"` brightens/blooms the periphery toward white (a bright
+    veiling fog that lightens the edges — e.g. some RP / hazy peripheral loss).
+
+    Args:
+        img: Input PIL Image (RGB).
+        severity: 0..1 — if `strength` is None, maps directly to how strong the
+            corner shading is (0 = none, 1 = corners fully black / white).
+        strength: Override for the corner shading amount (0..1).
+        radius: Normalised distance (0=centre, 1=corner) where shading starts.
+        softness: Width of the smoothstep falloff from `radius` outward.
+        mode: "dark" (multiply toward black) or "light" (blend toward white).
+    """
+    severity = float(np.clip(severity, 0.0, 1.0))
+    if strength is None:
+        strength = severity
+    strength = float(np.clip(strength, 0.0, 1.0))
+    if strength == 0.0:
+        return img.copy()
+
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    h, w = arr.shape[:2]
+    ys = np.arange(h, dtype=np.float32) / max(h - 1, 1) - 0.5
+    xs = np.arange(w, dtype=np.float32) / max(w - 1, 1) - 0.5
+    yy, xx = np.meshgrid(ys, xs, indexing="ij")
+    # Normalise so the corner distance is 1.0 (0.707 = sqrt(0.5^2+0.5^2)).
+    dist = np.sqrt(xx * xx + yy * yy) / 0.7071
+    t = np.clip((dist - radius) / max(softness, 1e-6), 0.0, 1.0)
+    s = (t * t * (3.0 - 2.0 * t)) * strength  # smoothstep * strength
+
+    if mode == "light":
+        # Blend toward white at the periphery (bright veiling fog).
+        out = arr * (1.0 - s[..., None]) + 1.0 * s[..., None]
+    elif mode == "dark":
+        out = arr * (1.0 - s[..., None])
+    else:
+        raise ValueError(f"Unknown vignette mode: {mode}")
+    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
 
 
 # =============================================================================
@@ -1724,6 +2100,7 @@ _FILTER_DISPATCH = {
     "nystagmus": apply_nystagmus,
     "flickering_stars": apply_flickering_stars,
     "floaters": apply_floaters,
+    "vignette": apply_vignette,
 }
 
 

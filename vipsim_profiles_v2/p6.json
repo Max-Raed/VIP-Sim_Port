@@ -1,0 +1,223 @@
+{
+  "id": "p6",
+  "version": "v2-table4-draft",
+  "caveat": "Re-tuned in the tuner 2026-07-10 (X-shaders re-enabled); doc fields restored from the pre-cleanup p6b.",
+  "description": "Cone-rod dystrophy: the widest stack (16 shaders). Keeps the bright washout look but adds the ~10 missing effects. Meeting: needs MORE overexposure and a gray (not black), smaller foveal scotoma.",
+  "table4_mapping": [
+    {
+      "shader": "Distortion",
+      "symbol": "!",
+      "our_filter": "distortion",
+      "note": ""
+    },
+    {
+      "shader": "Metamorphosia point",
+      "symbol": "!",
+      "our_filter": "vortex",
+      "note": ""
+    },
+    {
+      "shader": "Double Vision",
+      "symbol": "X",
+      "our_filter": "double_vision",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Vision loss central",
+      "symbol": "X",
+      "our_filter": "field_loss(central)",
+      "note": ""
+    },
+    {
+      "shader": "Hyperopia",
+      "symbol": "X",
+      "our_filter": "blur",
+      "note": ""
+    },
+    {
+      "shader": "Detail Loss",
+      "symbol": "X",
+      "our_filter": "detail_loss",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Color vision deficiency",
+      "symbol": "X",
+      "our_filter": "cvd",
+      "note": ""
+    },
+    {
+      "shader": "Contrast Sensitivity",
+      "symbol": "X",
+      "our_filter": "bcg",
+      "note": "bright washout"
+    },
+    {
+      "shader": "Cataracts",
+      "symbol": "X",
+      "our_filter": "cataracts",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Glare vision",
+      "symbol": "X",
+      "our_filter": "bloom+vignette(light)",
+      "note": "overexposure"
+    },
+    {
+      "shader": "Foveal Darkness",
+      "symbol": "X",
+      "our_filter": "foveal_darkness",
+      "note": "gray, smaller"
+    },
+    {
+      "shader": "Retinopathy / Floaters",
+      "symbol": "!",
+      "our_filter": "floaters",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Teichopsia",
+      "symbol": "-/!",
+      "our_filter": "teichopsia",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Metamorphosia overlay",
+      "symbol": "!",
+      "our_filter": "distortion",
+      "note": "(shared with Distortion)"
+    },
+    {
+      "shader": "Flickering Stars",
+      "symbol": "!",
+      "our_filter": "flickering_stars",
+      "note": "ADDED"
+    }
+  ],
+  "excluded_shaders": [],
+  "removed_from_v1": [],
+  "capability_gaps": [
+    "In-Filling (!): no filter exists. Capability gap for P6."
+  ],
+  "values_are_starting_points": true,
+  "panel_crop": [
+    1338,
+    508,
+    1784,
+    762
+  ],
+  "filters": [
+    {
+      "filter": "distortion",
+      "severity": 0
+    },
+    {
+      "filter": "vortex",
+      "severity": 0,
+      "center": [
+        0.5,
+        0.5
+      ],
+      "vortex_radius": 0.12,
+      "suction_strength": 0.9
+    },
+    {
+      "filter": "double_vision",
+      "severity": 0.05,
+      "axis": "horizontal"
+    },
+    {
+      "filter": "field_loss",
+      "severity": 0.20825,
+      "field_type": "central",
+      "overlay_scale": 3.4125
+    },
+    {
+      "filter": "blur",
+      "severity": 0.08331749999999999
+    },
+    {
+      "filter": "detail_loss",
+      "severity": 0.08
+    },
+    {
+      "filter": "cvd",
+      "cvd_type": "protanomaly",
+      "severity": 0.01
+    },
+    {
+      "filter": "bcg",
+      "brightness": 3.1395000000000004,
+      "contrast": 0.355,
+      "gamma": 0.7875000000000001,
+      "saturation": 0.08
+    },
+    {
+      "filter": "cataracts",
+      "severity": 1e-16
+    },
+    {
+      "filter": "bloom",
+      "severity": 0.4,
+      "intensity": 1,
+      "threshold": 0.45,
+      "blur_size": 1
+    },
+    {
+      "filter": "vignette",
+      "severity": 0,
+      "radius": 0.3,
+      "softness": 0.5,
+      "mode": "light"
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0.11,
+      "center": [
+        0.40754999999999997,
+        0.3105
+      ],
+      "radius_x": 0.36400000000000005,
+      "radius_y": 0.24700000000000003,
+      "edge_width": 0.27999999999999997,
+      "mode": "light"
+    },
+    {
+      "filter": "field_loss",
+      "severity": 0.7162999999999999,
+      "field_type": "central",
+      "mask_center": [
+        0.399,
+        0.30000000000000004
+      ],
+      "overlay_scale": 1.3599999999999999
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0.24255000000000002,
+      "center": [
+        0.409,
+        0.3
+      ],
+      "radius_x": 0.12568500000000002,
+      "radius_y": 0.12495,
+      "edge_width": 0.37224999999999997
+    },
+    {
+      "filter": "floaters",
+      "severity": 0,
+      "mode": "dark",
+      "distribution": "disc"
+    },
+    {
+      "filter": "teichopsia",
+      "severity": 0
+    },
+    {
+      "filter": "flickering_stars",
+      "severity": 0
+    }
+  ],
+  "renamed_from": "p6b"
+}

@@ -1,0 +1,117 @@
+{
+  "id": "p2",
+  "version": "v2-table4-draft",
+  "caveat": "DRAFT for the value-conversion work (now done solo). This stack is now CHECKLIST-COMPLETE against Table 4 (one filter per validated shader, excluding 'o' inappropriate ones), but the PARAMETER VALUES are starting points, not final: the Unity profiles store raw slider values while the Python port is normalized 0-1, so exact intensities must be derived from the original Unity values with the shader author.",
+  "description": "Optic atrophy, light-sensitive. Adds the two shaders our old p2 lacked: cataracts and double vision. Nystagmus is 'o' (inappropriate) so excluded.",
+  "table4_mapping": [
+    {
+      "shader": "Double Vision",
+      "symbol": "X",
+      "our_filter": "double_vision",
+      "note": "ADDED (was missing)"
+    },
+    {
+      "shader": "Vision loss central",
+      "symbol": "X",
+      "our_filter": "field_loss(central)",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Hyperopia",
+      "symbol": "X",
+      "our_filter": "blur",
+      "note": ""
+    },
+    {
+      "shader": "Color vision deficiency",
+      "symbol": "X",
+      "our_filter": "cvd(protanomaly)",
+      "note": "red-weak: orange->yellow"
+    },
+    {
+      "shader": "Contrast Sensitivity",
+      "symbol": "X",
+      "our_filter": "bcg",
+      "note": "bright/light-sensitive"
+    },
+    {
+      "shader": "Cataracts",
+      "symbol": "-",
+      "our_filter": "cataracts",
+      "note": "ADDED"
+    },
+    {
+      "shader": "Glare vision",
+      "symbol": "X",
+      "our_filter": "bloom",
+      "note": ""
+    },
+    {
+      "shader": "Foveal Darkness",
+      "symbol": "X",
+      "our_filter": "foveal_darkness",
+      "note": "central blind ellipse, gray"
+    }
+  ],
+  "excluded_shaders": [
+    "Nystagmus (o)"
+  ],
+  "removed_from_v1": [],
+  "capability_gaps": [],
+  "values_are_starting_points": true,
+  "filters": [
+    {
+      "filter": "double_vision",
+      "severity": 0.12,
+      "axis": "horizontal"
+    },
+    {
+      "filter": "field_loss",
+      "severity": 0.53,
+      "field_type": "central",
+      "mask_center": [
+        0.493,
+        0.499
+      ],
+      "mask_radius": 0.065
+    },
+    {
+      "filter": "blur",
+      "severity": 0.06
+    },
+    {
+      "filter": "cvd",
+      "cvd_type": "protanomaly",
+      "severity": 0.7
+    },
+    {
+      "filter": "bcg",
+      "brightness": 2.61,
+      "contrast": 0.7,
+      "gamma": 0.85
+    },
+    {
+      "filter": "cataracts",
+      "severity": 1e-08
+    },
+    {
+      "filter": "bloom",
+      "severity": 0.3
+    },
+    {
+      "filter": "foveal_darkness",
+      "severity": 0.01,
+      "center": [
+        0.5,
+        0.5
+      ],
+      "radius": 0.02
+    }
+  ],
+  "panel_crop": [
+    1338,
+    0,
+    1784,
+    254
+  ]
+}
