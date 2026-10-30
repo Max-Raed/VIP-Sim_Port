@@ -45,7 +45,7 @@ For these filters, equivalence is derived from source.
 **Files**
 - Shader: `windows/Assets/VisualEffects/Shaders/myBrightnessContrastGamma.shader`
 - Component: `windows/Assets/VisualEffects/Scripts/myBrightnessContrastGamma.cs`
-- Python: `vipsim_filters.py::apply_bcg` (line 128) and `_apply_bcg_per_channel` (line 211)
+- Python: `vipsim/filters.py::apply_bcg` (line 128) and `_apply_bcg_per_channel` (line 211)
 
 **Shader fragment math** (per pixel, all channels in [0, 1]):
 ```hlsl
@@ -91,7 +91,7 @@ arr  = pow(arr, gamma)                 # only when gamma != 1.0
 **Files**
 - Shader: `windows/Assets/VisualEffects/Shaders/myRecolour.shader`
 - Component: `windows/Assets/VisualEffects/Scripts/myRecolour.cs`
-- Python: `vipsim_filters.py::apply_cvd` (line 71), matrices at line 28
+- Python: `vipsim/filters.py::apply_cvd` (line 71), matrices at line 28
 
 **Shader fragment math**:
 ```hlsl
@@ -165,7 +165,7 @@ The SSIM_blur of 0.989 is carried by the ~86% of the frame Unity leaves sharp; i
 We render the same input image (`vipsim_assets/Trafficscene_2048x1024.png`, 2048×1024 POT) through:
 
 1. the original Unity VIP-Sim shaders, captured via the `PixelFidelityV2` scene (`unity_helpers/PixelFidelityCapture.cs`), and
-2. the Python port in `vipsim_filters.py`,
+2. the Python port in `vipsim/filters.py`,
 
 then compare each matched pair with the metric stack below. For severity-parameterised filters we sweep severity in {0.1, 0.2, …, 1.0} and report the best-scoring point. The pipeline lives in `validation_scripts/abs_diff.py` (per-pair metric computation) and `validation_scripts/validate_all_filters.py` (sweep driver, writes `validation_summary.{json,csv}` and stacked comparison PNGs).
 
@@ -203,7 +203,7 @@ For all of these, plain SSIM drops to 0.3 to 0.7 while the result is visually id
 - Scored with the same code, the *unfiltered* image (`unity_refs/baseline.png`) already reaches SSIM_blur ≥ 0.90 against 12 of the 17 passing references (blur, bloom, cvd, distortion, field_loss, flickering_stars, floaters, foveal_darkness, noise, pixelation, teichopsia, vortex). For those filters a pass does not separate the port from doing nothing. Of the passing filters only bcg, cataracts and double_vision are clearly separated; cvd rests on its Method A proof.
 - The best sweep point is selected on the same reference it is scored against; nothing is held out, and for several filters every sweep point passes.
 - For wiggle and flickering_stars the unfiltered baseline outscores the port on most burst frames (30/30 and 26/30); wiggle passes on the 30-frame mean while 17 frames are below 0.90.
-- The flickering_stars and nystagmus burst validators score their own time-aware models, not `apply_flickering_stars` / `apply_nystagmus` in `vipsim_filters.py`.
+- The flickering_stars and nystagmus burst validators score their own time-aware models, not `apply_flickering_stars` / `apply_nystagmus` in `vipsim/filters.py`.
 
 A null-relative criterion (score of the port minus score of the unfiltered image, with a margin) and references captured at clearly visible effect strengths are needed before these passes can be read as equivalence.
 
@@ -346,7 +346,7 @@ A few protocol notes carried over from setting these up:
 - **Nystagmus sampling interval.** The saccade cycle is `foveat_d + rise_d = 0.25 s` with default parameters. The burst interval must be much smaller than that (we use 0.05 s × 30 frames ≈ 6 cycles), otherwise every sample lands at the same cycle phase and the validation is trivial.
 - **Wiggle timer field.** `myWiggle` exposes both a `Timer` field and an `AutomaticTimer` toggle. The burst component sets `AutomaticTimer = true` and reads `Timer` each frame, then re-renders the same `Timer` value in Python via `apply_wiggle(..., timer=...)`.
 
-For nystagmus we additionally implement the time-aware saccade cycle directly in `validation_scripts/validate_nystagmus_burst.py` (`shift_deg_at` and `apply_uv_shift`), because the frozen-frame `apply_nystagmus` in `vipsim_filters.py` is a static motion-blur approximation rather than a time-aware port. The standalone implementation mirrors the Unity shader UV-shift convention (sample at `uv + _Displace`) and matches the Unity reference at SSIM_blur = 1.000 on every frame, including saccade peaks at shift_deg up to 7.83°.
+For nystagmus we additionally implement the time-aware saccade cycle directly in `validation_scripts/validate_nystagmus_burst.py` (`shift_deg_at` and `apply_uv_shift`), because the frozen-frame `apply_nystagmus` in `vipsim/filters.py` is a static motion-blur approximation rather than a time-aware port. The standalone implementation mirrors the Unity shader UV-shift convention (sample at `uv + _Displace`) and matches the Unity reference at SSIM_blur = 1.000 on every frame, including saccade peaks at shift_deg up to 7.83°.
 
 One trap worth noting for anyone re-running this validation: a previous capture run produced mean SSIM_blur 0.797 with the saccade frames sitting around 0.49 to 0.66, which initially looked like a magnitude mismatch in the UV-shift math. The runtime diagnostic dump (logging the live values of `foveat_d`, `rise_d`, `rise_exp`, `amp_deg`, `screenWidth_px`, `viewingAngle_deg`, and the capture-camera geometry) showed every parameter exactly matching the metadata, which ruled out the math. The actual cause was residual camera-transform rotation left over from a previous Play session: `myNystagmus.OnDisable` only subtracts the last `old_shift_deg` from the camera, so a hard stop mid-saccade can leave the camera rotated by a few degrees at the start of the next Play. A clean Play restart with no leftover rotation produces the 1.000 result reported above.
 

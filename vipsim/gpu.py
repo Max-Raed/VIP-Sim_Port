@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-vipsim_gpu.py — GPU (PyTorch) port of the VIP-Sim visual-impairment filters.
+vipsim.gpu — GPU (PyTorch) port of the VIP-Sim visual-impairment filters.
 
 Design goals
 ------------
@@ -15,7 +15,7 @@ Design goals
 
 This file ports a representative filter from each of the three buckets
 (cvd, bcg, blur, and a grid_sample warp) plus the MyoSuite hook.  The
-remaining ~15 filters in vipsim_filters.py follow the exact same patterns —
+remaining ~15 filters in vipsim/filters.py follow the exact same patterns —
 see the porting notes at the bottom.
 """
 
@@ -40,7 +40,7 @@ def linear_to_srgb(x: torch.Tensor) -> torch.Tensor:
 # -----------------------------------------------------------------------------
 # Bucket 1: matmul / elementwise  — CVD and BCG
 # -----------------------------------------------------------------------------
-# The 11-step CVD matrices, copied verbatim from vipsim_filters.CVD_MATRICES.
+# The 11-step CVD matrices, copied verbatim from vipsim.filters.CVD_MATRICES.
 # (Trimmed here to the deuteranomaly set for brevity; paste the full dict in.)
 _CVD_DEUTER = np.array([
     [[1,0,0],[0,1,0],[0,0,1]],
@@ -200,6 +200,9 @@ class VisualImpairmentWrapper(_Wrapper):
     """
 
     def __init__(self, env, chain, device="cuda", image_key=None):
+        if _Wrapper is object:
+            raise ImportError("VisualImpairmentWrapper requires gymnasium: "
+                              "pip install 'vipsim[gym]'")
         super().__init__(env)
         self.sim = VipSimGPU(device=device)
         self.chain = chain

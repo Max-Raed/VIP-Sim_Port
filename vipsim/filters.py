@@ -5,12 +5,12 @@ VipSim image filters — Python reimplementation of VIP-Sim Unity shaders.
 Simulates visual impairments on screenshots for VLM accessibility analysis.
 Based on shader code from https://github.com/Max-Raed/VIP-Sim (CC BY 4.0).
 
-Usage:
-    python vipsim_filters.py input.png output.png --filter blur --severity 0.5
-    python vipsim_filters.py input.png output.png --filter cvd --type deuteranomaly --severity 0.8
-    python vipsim_filters.py input.png output.png --filter contrast --brightness 0.8 --contrast 0.7 --gamma 1.5
-    python vipsim_filters.py input.png output.png --filter cataracts --severity 0.5
-    python vipsim_filters.py input.png output.png --preset moderate_low_vision
+Usage (installed: `vipsim ...` or `python -m vipsim ...`):
+    vipsim input.png output.png --filter blur --severity 0.5
+    vipsim input.png output.png --filter cvd --type deuteranomaly --severity 0.8
+    vipsim input.png output.png --filter bcg --brightness 0.8 --contrast 0.7 --gamma 1.5
+    vipsim input.png output.png --filter cataracts --severity 0.5
+    vipsim input.png output.png --preset moderate_low_vision
 """
 
 import argparse
@@ -76,7 +76,7 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
         cvd_type: One of 'protanomaly', 'deuteranomaly', 'tritanomaly', 'monochrome'.
         severity: 0.0 (no effect) to 1.0 (full effect).
     """
-    severity = np.clip(severity, 0.0, 1.0)
+    severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0:
         return img.copy()
 
@@ -115,7 +115,7 @@ def apply_blur(img: Image.Image, severity: float = 0.5) -> Image.Image:
         img: Input PIL Image.
         severity: 0.0 (no blur) to 1.0 (heavy blur). Maps to blur radius 0-15px.
     """
-    severity = np.clip(severity, 0.0, 1.0)
+    severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0:
         return img.copy()
     radius = severity * 15.0
@@ -489,11 +489,11 @@ def _radial_weight_mask(h: int, w: int, kind: str = "central",
 
 
 # Path to the VIP-Sim macular-degeneration overlay (copied from
-# VIP-Sim/windows/Assets/Resources/macular-degeneration.jpg). Used as the
-# faithful overlay for apply_field_loss; falls back to the radial mask if
-# the asset is missing.
+# VIP-Sim/windows/Assets/Resources/macular-degeneration.jpg), shipped as
+# package data. Used as the faithful overlay for apply_field_loss; falls back
+# to the radial mask if the asset is missing.
 _MACULAR_OVERLAY_PATH = (
-    Path(__file__).parent / "vipsim_assets" / "macular-degeneration.jpg"
+    Path(__file__).parent / "assets" / "macular-degeneration.jpg"
 )
 _MACULAR_OVERLAY_CACHE: dict = {}
 
@@ -565,7 +565,7 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
 
     Source: `myFieldLoss.cs` + `myFieldLoss.shader` (CC BY 4.0).
     Uses the real VIP-Sim `macular-degeneration.jpg` overlay if available
-    in `vipsim_assets/`; otherwise falls back to a generic radial mask.
+    in the package's `assets/`; otherwise falls back to a generic radial mask.
 
     Args:
         img: Input PIL Image (RGB).
@@ -575,7 +575,7 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
         overlay_scale: Mirrors Unity `_OverlayScale` — larger = overlay covers
             a larger fraction of the image.
         use_overlay_asset: If True, try to load the VIP-Sim overlay JPG
-            (`vipsim_assets/macular-degeneration.jpg`); falls back to a
+            (`vipsim/assets/macular-degeneration.jpg`); falls back to a
             radial mask if missing. Set False to force the radial mask.
         mask_center: Optional (cy, cx) in normalised coords. When given, the
             radial mask is used (overlay asset skipped) and centred there —
@@ -1442,7 +1442,8 @@ def apply_teichopsia(img: Image.Image, severity: float = 0.75,
         from skimage.color import rgb2hsv, hsv2rgb
         from skimage.draw import polygon as skpolygon
     except ImportError as e:
-        raise ImportError("teichopsia requires scikit-image") from e
+        raise ImportError("teichopsia requires scikit-image: "
+                          "pip install 'vipsim[teichopsia]'") from e
 
     arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
     h, w = arr.shape[:2]

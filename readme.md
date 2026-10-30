@@ -27,7 +27,7 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 
 - **20 visual-impairment filters** spanning color, optical, field-loss, distortion, and time-varying effects.
 - **24 clinical presets** that map named conditions (e.g. *macular degeneration*, *diplopia*, *scintillating scotoma*) to ready-made filter chains.
-- **Two backends** — a NumPy/PIL reference (`vipsim_filters.py`) and a batched PyTorch port (`vipsim_gpu.py`). The GPU port currently covers `cvd` (deuteranomaly), `bcg` and `blur`; its `vortex` is a placeholder swirl, not the CPU filter.
+- **Two backends** — a NumPy/PIL reference (`vipsim.filters`) and a batched PyTorch port (`vipsim.gpu`). The GPU port currently covers `cvd` (deuteranomaly), `bcg` and `blur`; its `vortex` is a placeholder swirl, not the CPU filter.
 - **Checked against Unity** — 17 of 19 tracked filters pass the repo's SSIM_blur criterion against matched Unity captures; read the [caveats](#-validation) before citing this.
 - **Drop-in Gym/MyoSuite wrapper** for applying impairment chains to RL observations on-device.
 - **Zero-dependency CLI** for one-off image processing.
@@ -36,8 +36,10 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 
 | File | Role |
 |---|---|
-| `vipsim_filters.py` | CPU reference implementation — 20 filters, 24 presets, and a CLI. The source of truth for behavior. |
-| `vipsim_gpu.py` | PyTorch port operating on batched, channels-first tensors `[N, 3, H, W]`. Includes a Gym/MyoSuite observation wrapper. |
+| `vipsim/filters.py` | CPU reference implementation — 20 filters, 24 presets, and a CLI. The source of truth for behavior. |
+| `vipsim/gpu.py` | PyTorch port operating on batched, channels-first tensors `[N, 3, H, W]`. Includes a Gym/MyoSuite observation wrapper. |
+| `vipsim_filters.py`, `vipsim_gpu.py` | Aliases so in-repo scripts and older commands keep working; not part of the installed package. |
+| `pyproject.toml` | Package metadata for `pip install` / PyPI (distribution name `vipsim`). |
 | `vipsim_equivalence_report.md` | The validation document: how the Python port is shown to reproduce the Unity shaders, with methods, metrics, and results. |
 | `vipsim_profiles_v2/` | The 7 validated VIP-Sim participant profiles as filter stacks (`p1-p7.json`), calibrated against the paper's Figure-6 panels, with side-by-side renders. |
 | `validation_scripts/profile_tuner.py` | Interactive browser tuner (localhost:8765): live sliders for every parameter, similarity scoring vs a reference, auto-tune, and a generated `/docs` page. |
@@ -49,33 +51,37 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 ### Install
 
 ```bash
-pip install numpy pillow            # CPU reference
-pip install torch                   # GPU port (optional)
+pip install .                       # CPU reference (numpy, pillow)
+pip install ".[teichopsia]"         # + scikit-image, needed by apply_teichopsia
+pip install ".[gpu]"                # + torch, for vipsim.gpu
+pip install ".[gym]"                # + torch and gymnasium, for VisualImpairmentWrapper
 ```
+
+Once published, replace `.` with `vipsim` (e.g. `pip install "vipsim[gpu]"`).
 
 ### Command line
 
 ```bash
-# Single filter
-python vipsim_filters.py input.png output.png --filter blur --severity 0.5
-python vipsim_filters.py input.png output.png --filter cvd --type deuteranomaly --severity 0.8
-python vipsim_filters.py input.png output.png --filter cataracts --severity 0.5
+# Single filter (`python -m vipsim ...` works too)
+vipsim input.png output.png --filter blur --severity 0.5
+vipsim input.png output.png --filter cvd --type deuteranomaly --severity 0.8
+vipsim input.png output.png --filter cataracts --severity 0.5
 
 # Brightness / contrast / gamma
-python vipsim_filters.py input.png output.png --filter bcg --brightness 0.8 --contrast 0.7 --gamma 1.5
+vipsim input.png output.png --filter bcg --brightness 0.8 --contrast 0.7 --gamma 1.5
 
 # Named preset (a chain of filters)
-python vipsim_filters.py input.png output.png --preset moderate_low_vision
+vipsim input.png output.png --preset moderate_low_vision
 
 # See everything available
-python vipsim_filters.py --list-presets
+vipsim --list-presets
 ```
 
 ### Python API
 
 ```python
 from PIL import Image
-import vipsim_filters as vip
+import vipsim as vip
 
 img = Image.open("scene.png").convert("RGB")
 
@@ -94,7 +100,7 @@ The PyTorch port works on a whole batch of frames at once and keeps everything o
 
 ```python
 import torch
-from vipsim_gpu import VipSimGPU
+from vipsim.gpu import VipSimGPU
 
 sim = VipSimGPU(device="cuda")
 x = torch.rand(8, 3, 256, 256, device="cuda")   # batch of 8 frames in [0,1]
@@ -106,7 +112,7 @@ x = sim.blur(x, severity=0.4)
 ### Inside an RL / MyoSuite environment
 
 ```python
-from vipsim_gpu import VisualImpairmentWrapper
+from vipsim.gpu import VisualImpairmentWrapper
 
 env = VisualImpairmentWrapper(
     env,
@@ -160,7 +166,7 @@ Presets bundle one or more filters under a recognizable name. A selection:
 | `photophobia` | Glare sensitivity |
 | `nystagmus_motion` / `floaters` / `visual_noise` | Motion blur, floaters, visual snow |
 
-Run `python vipsim_filters.py --list-presets` for the full set of 24 with descriptions.
+Run `vipsim --list-presets` for the full set of 24 with descriptions.
 
 ## 🧑‍🤝‍🧑 Participant profiles (`vipsim_profiles_v2/`)
 
@@ -234,6 +240,16 @@ python validation_scripts/validate_nystagmus_burst.py
 python -m unittest discover -s tests -v
 ```
 
+### Releasing to PyPI
+
+The distribution name is `vipsim`; the version lives in `vipsim/__init__.py`.
+
+```bash
+python -m pip install build twine
+python -m build                      # writes dist/vipsim-<version>.tar.gz and .whl
+python -m twine check dist/*
+python -m twine upload dist/*        # use --repository testpypi for a dry run
+```
 
 ## 📚 References
 
