@@ -7,10 +7,14 @@ name = "vipsim"
 dynamic = ["version"]
 description = "Visual-impairment simulation filters: a NumPy/PyTorch port of the VIP-Sim Unity shaders"
 readme = "readme.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Max Rädler" }]
+authors = [
+    { name = "Max Rädler" },
+    { name = "Omid Rajabi" },
+    { name = "Mark Colley" },
+]
 keywords = ["visual impairment", "low vision", "accessibility", "simulation", "image filters", "VIP-Sim"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -18,20 +22,21 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "numpy>=1.22",
-    "pillow>=9.1",
+    "numpy>=2.3",
+    "pillow>=12.0",
 ]
 
 [project.optional-dependencies]
 # apply_teichopsia needs scikit-image (HSV conversion, polygon raster).
-teichopsia = ["scikit-image>=0.19"]
-# torch 2.0 wheels are built against numpy 1.23; with numpy 1.22,
-# torch.from_numpy raises "Numpy is not available".
-gpu = ["torch>=2.0", "numpy>=1.23"]
-gym = ["vipsim[gpu]", "gymnasium>=0.26"]
+teichopsia = ["scikit-image>=0.24"]
+gpu = ["torch>=2.11"]
+gym = ["vipsim[gpu]", "gymnasium>=1.0.0"]
 all = ["vipsim[teichopsia,gpu,gym]"]
 
 [project.scripts]

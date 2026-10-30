@@ -6,7 +6,7 @@
 
 *A Python (NumPy/PIL) and GPU (PyTorch) reimplementation of the [VIP-Sim](https://github.com/Max-Raed/VIP-Sim) Unity shaders — proven equivalent to the originals and built for VLM accessibility analysis and embodied-AI training.*
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-GPU-EE4C2C?logo=pytorch&logoColor=white)
 ![NumPy](https://img.shields.io/badge/NumPy-Pillow-013243?logo=numpy&logoColor=white)
 ![Filters](https://img.shields.io/badge/filters-20-brightgreen)
