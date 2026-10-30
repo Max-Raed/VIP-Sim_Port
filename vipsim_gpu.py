@@ -77,8 +77,10 @@ class VipSimGPU:
         idx = float(np.clip(severity, 0, 1)) * (n - 1)
         i0 = int(np.floor(idx)); i1 = min(i0 + 1, n - 1); w = idx - i0
         mat = table[i0] * (1 - w) + table[i1] * w            # [3,3]
+        # Linear light, as in Unity's Linear-colour-space myRecolour pass.
         # x:[N,3,H,W], mat:[3,3]  ->  out[N,i,H,W] = sum_j mat[i,j] x[N,j,H,W]
-        return torch.einsum("ij,njhw->nihw", mat, x).clamp(0, 1)
+        lin = torch.einsum("ij,njhw->nihw", mat, srgb_to_linear(x))
+        return linear_to_srgb(lin)
 
     # ---- BCG: linear-space brightness/contrast/gamma ------------------------
     def bcg(self, x: torch.Tensor, brightness=1.0, contrast=1.0, gamma=1.0,

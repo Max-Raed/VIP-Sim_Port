@@ -80,13 +80,16 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
     if severity == 0.0:
         return img.copy()
 
-    arr = np.asarray(img, dtype=np.float32) / 255.0
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    # VIP-Sim is a Linear-colour-space project, so myRecolour.shader applies
+    # the matrices to linear RGB (the space Machado et al. derive them in).
+    lin = _srgb_to_linear(arr)
 
     if cvd_type == "monochrome":
         gray_weights = np.array([0.299, 0.587, 0.114])
-        gray = np.dot(arr[..., :3], gray_weights)
+        gray = np.dot(lin, gray_weights)
         gray_rgb = np.stack([gray] * 3, axis=-1)
-        result = arr[..., :3] * (1 - severity) + gray_rgb * severity
+        result = lin * (1 - severity) + gray_rgb * severity
     else:
         matrices = CVD_MATRICES[cvd_type]
         # Interpolate between matrix steps (same as VIP-Sim)
@@ -96,11 +99,9 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
         i1 = min(i0 + 1, n - 1)
         w = idx - i0
         mat = matrices[i0] * (1 - w) + matrices[i1] * w  # 3x3
-        result = np.dot(arr[..., :3], mat.T)
+        result = np.dot(lin, mat.T)
 
-    result = np.clip(result, 0, 1)
-    result = _to_uint8(result)
-    return Image.fromarray(result)
+    return Image.fromarray(_to_uint8(_linear_to_srgb(result)))
 
 
 # =============================================================================

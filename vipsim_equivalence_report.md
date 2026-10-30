@@ -100,7 +100,7 @@ half4 output   = mul(_ColourTransform, original.xyzw);
 output         = clamp(output, 0, 1);
 return output;
 ```
-No gamma correction. The shader comments explicitly note it is not applied. All math in sRGB (gamma) space.
+The shader's own gamma lines are commented out, but that does not mean the math runs on sRGB values: VIP-Sim is a Linear-colour-space project (`ProjectSettings.asset`: `m_ActiveColorSpace: 1`), so `tex2D` on the camera target returns linear values and the sRGB target re-encodes on write. All math is in linear RGB, the space the Machado matrices are defined in.
 
 **Component param flow** (in `computeTransformationMatrix`):
 1. Three 11-step lookup tables `T_Protanomaly`, `T_Deuteranomaly`, `T_Tritanomaly` indexed by severity in {0.0, 0.1, …, 1.0}.
@@ -121,10 +121,11 @@ i0 = floor(idx)
 i1 = min(i0 + 1, 10)
 w = idx - i0
 mat = matrices[i0] * (1 - w) + matrices[i1] * w
-result = arr @ mat.T                  # equivalent to mul(mat, vec) per pixel
-result = clip(result, 0, 1)
+lin = srgb_to_linear(arr)             # mirror Unity's Linear colour space
+result = lin @ mat.T                  # equivalent to mul(mat, vec) per pixel
+result = linear_to_srgb(clip(result, 0, 1))
 ```
-Monochrome path computes `gray = 0.299·R + 0.587·G + 0.114·B` directly and lerps `arr * (1 − s) + gray_rgb * s`.
+Monochrome path computes `gray = 0.299·R + 0.587·G + 0.114·B` on the linear values and lerps `lin * (1 − s) + gray_rgb * s`.
 
 **Equivalence.**
 
@@ -140,11 +141,11 @@ Monochrome path computes `gray = 0.299·R + 0.587·G + 0.114·B` directly and le
 3. **Matrix application**: `mul(M, v)` (Unity, column vector) equals `arr @ M.T` (Python, row vector); standard linear-algebra identity.
 4. **Monochrome**: Python's `arr * (1 − s) + gray · s` equals applying the row-lerped luma matrix `[(1 − 0.701s, 0.587s, 0.114s), …]` by matrix-multiply linearity. Algebraically identical.
 5. **Final clamp**: identical (`clamp/clip [0,1]`).
-6. **Gamma**: neither side applies gamma correction, same approximation on both sides.
+6. **Colour space**: both sides apply the matrix to linear RGB. Earlier revisions of the port applied it to sRGB code values, which this section wrongly called equivalent; that made saturated colours far too dark (pure red under protanomaly at severity 1.0: (38, 29, 0) instead of (109, 95, 0)).
 
 Caveat: shader uses `half` (fp16), Python uses fp32. Same noise floor as BCG.
 
-**Verdict.** Closed by source equivalence for all four anomaly types. Confirmatory Unity render at (Deuteranomaly, severity=0.6) matches Python output to the noise floor (measured: SSIM_blur 0.998, see § 4.4).
+**Verdict.** Closed by source equivalence for all four anomaly types. Confirmatory check at (Deuteranomaly, severity=0.6), feeding the port Unity's own unfiltered capture (`unity_refs/baseline.png`, which removes the input-texture compression offset): MAE 0.066, max 1 against `cvd_deutan_sev06.png` (the sRGB-space version scored MAE 1.04). Regression test: `tests/test_cvd.py`.
 
 ### 3.3 Field-loss masks (central, peripheral, hemianopia)
 
