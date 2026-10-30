@@ -35,6 +35,9 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter
 from skimage.metrics import structural_similarity as _ssim
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from metric_constants import SSIM_BLUR_SIGMA  # noqa: E402
+
 
 # -----------------------------------------------------------------------------
 # Time-aware nystagmus (faithful port of myNystagmus.OnUpdate saccade math)
@@ -122,7 +125,7 @@ def render_nystagmus(baseline: np.ndarray, timer_secs: float, *,
 # Comparison + reporting
 # -----------------------------------------------------------------------------
 
-def ssim_blur(a: np.ndarray, b: np.ndarray, sigma: float = 4.0) -> float:
+def ssim_blur(a: np.ndarray, b: np.ndarray, sigma: float = SSIM_BLUR_SIGMA) -> float:
     a01 = a.astype(np.float32) / 255.0
     b01 = b.astype(np.float32) / 255.0
     af = gaussian_filter(a01, sigma=(sigma, sigma, 0))
