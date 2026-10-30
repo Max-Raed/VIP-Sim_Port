@@ -23,12 +23,20 @@ from test_rounding import GpuParityCase  # noqa: E402
 TRAFFIC = ROOT / "vipsim_assets" / "Trafficscene.png"
 BLUR_SEVERITIES = (0.005, 0.01, 0.02, 0.03, 0.05, 0.2, 0.4, 1.0)
 # (width, height) -> (width, height), PIL order: bloom's /4 and back,
-# pixelation-like odd ratios, one axis only, and degenerate sizes.
+# pixelation-like odd ratios, one axis only, and degenerate sizes.  Then the
+# pass order (see _pil_vertical_first): three pairs that shrink the height by
+# more than twice as many pixels as the width, where Pillow 13 resamples
+# vertically first (bloom's /4 of a portrait frame), and four frames at least
+# 100 times taller than wide, where Pillow 12.2 goes vertical first when the
+# height shrinks: 10x1000 is on its boundary (horizontal first), and the
+# last two pairs go vertical first on 12.2 only.
 RESIZES = [((96, 64), (24, 16)), ((24, 16), (96, 64)), ((84, 84), (21, 21)),
            ((21, 21), (84, 84)), ((97, 61), (20, 20)), ((20, 20), (97, 61)),
            ((96, 64), (96, 16)), ((96, 64), (31, 64)), ((5, 7), (3, 11)),
            ((96, 64), (990, 990)), ((990, 990), (96, 64)), ((1, 1), (5, 4)),
-           ((7, 3), (1, 1))]
+           ((7, 3), (1, 1)), ((40, 96), (10, 24)), ((5, 30), (3, 22)),
+           ((2, 7), (1, 1)), ((10, 1000), (2, 250)), ((10, 1001), (2, 250)),
+           ((10, 1001), (9, 1000)), ((3, 400), (2, 399))]
 
 
 def natural_crop(h, w):
@@ -80,6 +88,18 @@ class TestGpuBlurMatchesPil(GpuPrimitiveCase):
                 x = self.vg.exact_div(x.to(self.sim.device).float(), 255.0)[None]
                 gpu = self.vg.gpu_to_frames(self.vg.pil_gaussian_blur(x, radius))[0]
                 np.testing.assert_array_equal(gpu.reshape(a.shape), cpu)
+
+    def test_window_sums_beyond_int32_are_bit_exact(self):
+        # Pillow sums a window of up to 2r + 1 levels in a UINT32: 255s
+        # overflow an int32 from a box radius of ~4.2M px (bloom's blur_size
+        # around 5.6e6).  Measured: 0 where PIL gives 255 before the fix.
+        for shape, radius in [((1, 1, 3), 4.5e6), ((1, 3, 3), 6e6), ((1, 2, 3), 8e6)]:
+            with self.subTest(shape=shape, radius=radius):
+                a = np.full(shape, 255, np.uint8)
+                cpu = np.asarray(Image.fromarray(a).filter(ImageFilter.GaussianBlur(radius)))
+                x = self.vg.frames_to_gpu(a, self.sim.device)
+                gpu = self.vg.gpu_to_frames(self.vg.pil_gaussian_blur(x, radius))[0]
+                np.testing.assert_array_equal(gpu, cpu)
 
     def test_batch_is_blurred_per_frame(self):
         a, b = self.frames["random_84x84"], self.frames["traffic_84x84"]
@@ -270,6 +290,27 @@ class TestGpuCache(GpuPrimitiveCase):
         self.assertEqual((a.dtype, a.device.type), (self.torch.float32, self.sim.device.type))
         self.assertEqual(b.dtype, self.torch.float64)
         np.testing.assert_array_equal(b.cpu().numpy(), field())
+
+    def test_key_tells_equal_values_of_other_types_apart(self):
+        # NEP 50 makes np.float64(0.5) and 0.5 build different CPU fields,
+        # and numpy rejects some equal values (a float seed, a Decimal):
+        # each type gets its own entry, and what _freeze cannot key exactly
+        # is built on every call, never cached.
+        from decimal import Decimal
+        sim = self.vg.VipSimGPU(device=self.sim.device, cache_size=16)
+        n = []
+
+        def field():
+            n.append(1)
+            return np.zeros(1)
+        params = (0.5, np.float64(0.5), np.float32(0.5), np.array(0.5), 1, 1.0,
+                  True, -0.0, 0.0, Decimal("0.5"), Decimal("0.5"))
+        for p in params:
+            sim.numpy_field("f", {"severity": p}, (1, 1), field)
+        self.assertEqual((len(n), len(sim.cache)), (len(params), len(params) - 2))
+        for p in params[:-2]:                   # all hits now
+            sim.numpy_field("f", {"severity": p}, (1, 1), field)
+        self.assertEqual(len(n), len(params))
 
     def test_numpy_field_tuple_and_dtypes(self):
         sy, sx, m = self.sim.numpy_field(
