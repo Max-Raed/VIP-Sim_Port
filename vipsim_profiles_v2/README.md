@@ -4,9 +4,11 @@
 `vipsim_profiles/` (pending: In-Filling gap decision, p4 missing shaders, Opus re-audit).**
 The final 7 live here as plain `p1-p7.json` (each carries `renamed_from`); every variant
 and rejected experiment is archived in `alternative-profiles/`. Tuner-metric similarity vs
-the clean refs: p1 89.5, p2 95.8, p3 97.1, p4 93.6, p5 80.9 (metric-capped, judge by eye),
-p6 98.0, p7 87.4. Steps may carry `_disabled: true` (skipped by the tuner, the renderer,
-`run_audit_eval.py` and `abs_diff.py`). Tune with `scripts/profile_tuner.py`
+the clean refs: p1 89.4, p2 95.9, p3 96.9, p4 93.3, p5 81.0 (metric-capped, judge by eye),
+p6 97.9, p7 87.3 (re-scored 2026-10-29 after the uint8-rounding fix; tuned values unchanged,
+previously 89.5 / 95.8 / 97.1 / 93.6 / 80.9 / 98.0 / 87.4).
+Steps may carry `_disabled: true` (skipped by the tuner, the renderer,
+`run_audit_eval.py` and `abs_diff.py`). Tune with `validation_scripts/profile_tuner.py`
 (localhost:8765; see its `/docs` page for every filter + parameter in plain language).
 
 These are corrected recreations of the 7 VIP-Sim participant profiles, rebuilt so each
@@ -71,9 +73,9 @@ has an optional swirl term + elliptical field, and the smudges are freely positi
 - **Clean refs:** `renders/ref-Images/p1-p7.png` (whitespace-free panel extractions) are the
   ground truth; `panel_crop` is only a fallback. Each paper panel is a slightly different
   ~92-96% crop of the Trafficscene: per-panel `SCENE_CROP_FRAC` in
-  `scripts/render_profiles_v2.py` aligns ours to the ref framing (variants inherit the base
+  `validation_scripts/render_profiles_v2.py` aligns ours to the ref framing (variants inherit the base
   profile's crop via the `pN` prefix).
-- **Interactive tuner:** `.venv/bin/python scripts/profile_tuner.py` → http://localhost:8765.
+- **Interactive tuner:** `.venv/bin/python validation_scripts/profile_tuner.py` → http://localhost:8765.
   Live sliders for every parameter, wipe compare, 🎯 click-to-position, ✏️ sketch overlay
   (with floaters "dots → drawn area"), 📍 per-step influence highlight, save-as-new-profile,
   and a live "ours is X% similar" pill (SSIM / mean-abs-pixel / CIEDE2000: the equivalence-
@@ -98,7 +100,7 @@ has an optional swirl term + elliptical field, and the smudges are freely positi
 
 ## Regenerate the renders
 
-`.venv/bin/python scripts/render_profiles_v2.py [p1 p3b ...]` (default: p1-p7). It loads each
+`.venv/bin/python validation_scripts/render_profiles_v2.py [p1 p3b ...]` (default: p1-p7). It loads each
 `pN.json`, takes the clean ref from `renders/ref-Images/` (falls back to `panel_crop`), crops
 the Trafficscene to that panel's measured framing, applies the stack, and writes a borderless
 ref|ours pair to `renders/pN.png`.
