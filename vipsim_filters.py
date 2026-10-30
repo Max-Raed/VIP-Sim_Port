@@ -99,7 +99,7 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
         result = np.dot(arr[..., :3], mat.T)
 
     result = np.clip(result, 0, 1)
-    result = (result * 255).astype(np.uint8)
+    result = _to_uint8(result)
     return Image.fromarray(result)
 
 
@@ -136,6 +136,15 @@ def _srgb_to_linear(x: np.ndarray) -> np.ndarray:
 def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
     x = np.clip(x, 0.0, 1.0)
     return np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1.0 / 2.4) - 0.055)
+
+
+def _to_uint8(x: np.ndarray, scale: float = 255.0) -> np.ndarray:
+    """Quantise to uint8 by rounding; `scale` maps the input range to 0..255.
+
+    Truncating with astype(np.uint8) instead biases every output ~0.5 LSB
+    darker, and the bias accumulates when filters are chained.
+    """
+    return np.clip(np.rint(np.asarray(x) * scale), 0, 255).astype(np.uint8)
 
 
 # =============================================================================
@@ -190,7 +199,7 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
                               dtype=np.float32))[..., None]
         arr = np.clip(lum + (arr - lum) * saturation, 0.0, 1.0)
     out = arr if color_space == "srgb" else _linear_to_srgb(arr)
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # =============================================================================
@@ -323,7 +332,7 @@ def apply_cataracts(img: Image.Image, severity: float = 0.5,
         sy = (src_v * (h - 1)).astype(np.int32)
         arr = arr[sy, sx]
 
-    out = (np.clip(arr, 0.0, 1.0) * 255).astype(np.uint8)
+    out = _to_uint8(arr)
     return Image.fromarray(out)
 
 
@@ -352,7 +361,7 @@ def _separable_gaussian(arr: np.ndarray, radius_px: float) -> np.ndarray:
     """
     if radius_px <= 0:
         return arr
-    pil = Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8))
+    pil = Image.fromarray(_to_uint8(arr))
     blurred = pil.filter(ImageFilter.GaussianBlur(radius=float(radius_px)))
     return np.asarray(blurred, dtype=np.float32) / 255.0
 
@@ -397,7 +406,7 @@ def apply_bloom(img: Image.Image, severity: float = 0.5,
     width_mod = 0.5
     rt_w, rt_h = max(1, w // divider), max(1, h // divider)
     down = np.asarray(
-        Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8)).resize((rt_w, rt_h), Image.BILINEAR),
+        Image.fromarray(_to_uint8(arr)).resize((rt_w, rt_h), Image.BILINEAR),
         dtype=np.float32,
     ) / 255.0
 
@@ -412,14 +421,14 @@ def apply_bloom(img: Image.Image, severity: float = 0.5,
 
     # 4. Upsample bloom and additive composite (fragBloom: color + bloom)
     bloom_full = np.asarray(
-        Image.fromarray((np.clip(bright, 0, 1) * 255).astype(np.uint8)).resize(
+        Image.fromarray(_to_uint8(bright)).resize(
             (w, h), Image.BILINEAR
         ),
         dtype=np.float32,
     ) / 255.0
     out_lin = np.clip(arr + bloom_full, 0.0, 1.0)
     out = _linear_to_srgb(out_lin)
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # =============================================================================
@@ -616,7 +625,7 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
     hi_sample = stack[hi, iy, ix]
     out = lo_sample * (1 - frac) + hi_sample * frac
 
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # =============================================================================
@@ -842,7 +851,7 @@ def apply_double_vision(img: Image.Image, severity: float = 0.5,
     left = shifted(arr, -px, -py)
     right = shifted(arr, px, py)
     out = 0.5 * (left + right)
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out, 1.0))
 
 
 # =============================================================================
@@ -1028,7 +1037,7 @@ def apply_led(img: Image.Image, severity: float = 0.5,
         m[:, (xs < margin) | (xs > 1.0 - margin)] = 0.0
         out = out * m[..., None]
 
-    return Image.fromarray(np.clip(out * 255, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # -- Vortex ------------------------------------------------------------------
@@ -1254,7 +1263,7 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
 
         out = np.where(inside[..., None], blended, arr)
 
-    return Image.fromarray(np.clip(out * 255, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # -- Wiggle ------------------------------------------------------------------
@@ -1338,7 +1347,7 @@ def apply_noise(img: Image.Image, severity: float = 0.5,
     n = (rng.random((h, w)).astype(np.float32) - 0.5) * 2.0  # [-1, 1]
     intensity = severity * 0.35
     out = arr + n[..., None] * intensity
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # -- Glitch (RGB channel offset) --------------------------------------------
@@ -1377,7 +1386,7 @@ def apply_glitch(img: Image.Image, severity: float = 0.5,
         g[y] = np.roll(arr[y, :, 1], d // 2)
         b[y] = np.roll(arr[y, :, 2], -d)
     out = np.stack([r, g, b], axis=-1)
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out, 1.0))
 
 
 # -- Teichopsia (scintillating scotoma) --------------------------------------
@@ -1506,7 +1515,7 @@ def apply_teichopsia(img: Image.Image, severity: float = 0.75,
 
     out = arr.copy()
     out[screen_mask] = scint[screen_mask]
-    return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # -- Foveal Darkness ---------------------------------------------------------
@@ -1589,7 +1598,7 @@ def apply_foveal_darkness(img: Image.Image, severity: float = 0.5,
         out = arr + (255.0 - arr) * darken[..., None]
     else:
         out = arr * (1.0 - darken[..., None])
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out, 1.0))
 
 
 # -- Nystagmus ---------------------------------------------------------------
@@ -1624,7 +1633,7 @@ def apply_nystagmus(img: Image.Image, severity: float = 0.5,
             sh = np.roll(np.roll(arr, sx, axis=1), sy, axis=0)
         accum += sh
     out = accum / n_samples
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # -- Flickering Stars --------------------------------------------------------
@@ -1658,7 +1667,7 @@ def apply_flickering_stars(img: Image.Image, severity: float = 0.5,
         px0 = x0 - (sx_ - 2); px1 = px0 + (x1 - x0)
         sprite = (255.0 * b * fall[py0:py1, px0:px1])[..., None]
         out[y0:y1, x0:x1] = np.maximum(out[y0:y1, x0:x1], sprite)
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out, 1.0))
 
 
 # -- Floaters ----------------------------------------------------------------
@@ -1865,7 +1874,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             tile = out[y0:y1, x0:x1, c]
             tile[mask] = tile[mask] * (1.0 - alpha) + target_val * alpha
             out[y0:y1, x0:x1, c] = tile
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out, 1.0))
 
 
 # =============================================================================
@@ -1919,7 +1928,7 @@ def apply_vignette(img: Image.Image, severity: float = 0.5,
         out = arr * (1.0 - s[..., None])
     else:
         raise ValueError(f"Unknown vignette mode: {mode}")
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+    return Image.fromarray(_to_uint8(out))
 
 
 # =============================================================================
