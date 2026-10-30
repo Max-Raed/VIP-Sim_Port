@@ -2120,8 +2120,9 @@ def apply_preset(img: Image.Image, preset_name: str) -> Image.Image:
 
 def main():
     parser = argparse.ArgumentParser(description="VipSim image filters for VLM accessibility analysis")
-    parser.add_argument("input", help="Input image path")
-    parser.add_argument("output", help="Output image path")
+    # Optional at parse time so --list-presets works without paths; enforced below.
+    parser.add_argument("input", nargs="?", help="Input image path")
+    parser.add_argument("output", nargs="?", help="Output image path")
 
     filter_choices = list(_FILTER_DISPATCH.keys())
     group = parser.add_mutually_exclusive_group(required=True)
@@ -2143,10 +2144,8 @@ def main():
                         help="Field-loss mask type")
     parser.add_argument("--axis", default="horizontal",
                         choices=["horizontal", "vertical", "diagonal", "both"],
-                        help="Displacement axis (double-vision / nystagmus)")
-    parser.add_argument("--position", default="left",
-                        choices=["left", "right"],
-                        help="Teichopsia crescent position")
+                        help="Displacement axis (double-vision: horizontal/vertical/diagonal; "
+                             "nystagmus: horizontal/vertical/both)")
     parser.add_argument("--floater-mode", dest="floater_mode", default="dark",
                         choices=["dark", "light"],
                         help="Floater appearance mode")
@@ -2157,6 +2156,10 @@ def main():
         for name, preset in PRESETS.items():
             print(f"  {name}: {preset['description']}")
         return
+    if args.input is None or args.output is None:
+        parser.error("the following arguments are required: input, output")
+    if args.filter == "double_vision" and args.axis == "both":
+        parser.error("double_vision supports --axis horizontal, vertical or diagonal")
 
     img = Image.open(args.input).convert("RGB")
 
@@ -2172,8 +2175,6 @@ def main():
         result = apply_double_vision(img, severity=args.severity, axis=args.axis)
     elif args.filter == "nystagmus":
         result = apply_nystagmus(img, severity=args.severity, axis=args.axis)
-    elif args.filter == "teichopsia":
-        result = apply_teichopsia(img, severity=args.severity, position=args.position)
     elif args.filter == "floaters":
         result = apply_floaters(img, severity=args.severity, mode=args.floater_mode)
     else:
