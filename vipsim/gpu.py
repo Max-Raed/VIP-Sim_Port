@@ -5,7 +5,9 @@ vipsim.gpu — GPU (PyTorch) port of the VIP-Sim visual-impairment filters.
 Every filter of vipsim/filters.py (all 21 in _FILTER_DISPATCH) is a VipSimGPU
 method with the CPU name, keyword arguments, defaults and positional order:
 `sim.cvd(x, cvd_type="protanomaly", severity=0.6)` is
-`apply_cvd(img, cvd_type="protanomaly", severity=0.6)` on a batch.
+`apply_cvd(img, cvd_type="protanomaly", severity=0.6)` on a batch.  Presets
+and vipsim_profiles_v2 profiles run with VipSimGPU.apply_preset /
+apply_profile.
 
 Design goals
 ------------
@@ -16,7 +18,7 @@ Design goals
   truncation, 8-bit intermediates, PIL's integer arithmetic); CPU bugs are
   fixed in filters.py first, never only here.
 * Every twin is bit-exact with its CPU filter where tested (tests/test_gpu_*.py
-  assert equality).  The CPU only
+  assert equality; TWIN_TOLERANCE lists the documented bound).  The CPU only
   ever sees a uint8 image, so each twin reads x as its 8-bit levels and
   returns level/255 in x's dtype: a chain of GPU filters sees the CPU chain's
   images.
@@ -59,6 +61,7 @@ primitive each filter uses.
 """
 
 from __future__ import annotations
+import inspect
 import math
 from collections import OrderedDict
 
@@ -68,8 +71,9 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFilter
 
-from .filters import (CVD_MATRICES, _apply_bcg_per_channel, _box_muller,
-                      _linear_to_srgb, _load_macular_overlay, _perlin_noise_2d,
+from .filters import (CVD_MATRICES, PRESETS, _FILTER_DISPATCH,
+                      _apply_bcg_per_channel, _box_muller, _linear_to_srgb,
+                      _load_macular_overlay, _perlin_noise_2d,
                       _radial_weight_mask, _srgb_to_linear, _to_uint8)
 
 
@@ -2077,6 +2081,60 @@ class VipSimGPU:
             out = out + s
         return _from_u8(_u8(out), x.dtype)
 
+    # ---- Chains: presets and profiles ---------------------------------------
+    def apply_chain(self, x: torch.Tensor, chain) -> torch.Tensor:
+        """Run [(method_name, kwargs), ...] in order, like apply_preset's loop."""
+        for name, kwargs in chain:
+            x = getattr(self, name)(x, **kwargs)
+        return x
+
+    def apply_preset(self, x: torch.Tensor, preset_name: str) -> torch.Tensor:
+        """Twin of apply_preset: the named chain of filters.PRESETS."""
+        return self.apply_chain(x, PRESETS[preset_name]["filters"])
+
+    def apply_profile(self, x: torch.Tensor, profile) -> torch.Tensor:
+        """Run a vipsim_profiles_v2 profile's filter stack (see profile_chain),
+        as validation_scripts/render_profiles_v2.apply_stack does on the CPU."""
+        return self.apply_chain(x, profile_chain(profile))
+
+
+# -----------------------------------------------------------------------------
+# Profiles (vipsim_profiles_v2) and the parity contract
+# -----------------------------------------------------------------------------
+def profile_chain(profile) -> list:
+    """A vipsim_profiles_v2 profile as a chain of (method_name, kwargs).
+
+    profile: the parsed pN.json, or its "filters" list.  It is read the way
+    validation_scripts/render_profiles_v2.apply_stack reads it: steps with
+    "_disabled" set are skipped, "filter" names the filter and keys starting
+    with "_" are notes; a "severity" the filter does not take (bcg) is
+    dropped, where apply_stack retries the call without it.  The chain is
+    what VipSimGPU.apply_chain and VisualImpairmentWrapper take.
+    """
+    steps = profile["filters"] if isinstance(profile, dict) else profile
+    chain = []
+    for step in steps:
+        if step.get("_disabled"):
+            continue
+        kwargs = {k: v for k, v in step.items()
+                  if k != "filter" and not k.startswith("_")}
+        method = getattr(VipSimGPU, step["filter"])
+        if "severity" not in inspect.signature(method).parameters:
+            kwargs.pop("severity", None)
+        chain.append((step["filter"], kwargs))
+    return chain
+
+
+# Tolerance of each twin against its CPU filter: (max, mean) of |gpu - cpu| in
+# 8-bit levels over an image, for frames_to_gpu input.  Every twin is
+# bit-exact where tested (numpy 2.5 + OpenBLAS 0.3.34 on x86-64, Pillow 12.2
+# and 13.0, CUDA and CPU torch).  cvd, bcg (saturation != 1) and
+# foveal_darkness (mode="desat") mix the channels in the order numpy's BLAS
+# sums a 3-element dot (_channel_dot); a BLAS build that fuses multiply-adds
+# rounds a few of those sums otherwise, so they keep GpuParityCase's bound.
+TWIN_TOLERANCE = {name: (1, 0.02) if name in ("cvd", "bcg", "foveal_darkness")
+                  else (0, 0.0) for name in _FILTER_DISPATCH}
+
 
 # -----------------------------------------------------------------------------
 # Conversion helpers: MuJoCo renderer (HxWx3 uint8 numpy) <-> GPU tensor
@@ -2124,7 +2182,9 @@ class VisualImpairmentWrapper(_Wrapper):
     chain: list of (method_name, kwargs), e.g.
         [("cvd", {"severity": 0.8}), ("blur", {"severity": 0.4})]
     Every filter of vipsim.filters is a VipSimGPU method with the CPU's name
-    and keyword arguments, and the output matches the CPU chain.
+    and keyword arguments, and the output matches the CPU chain (see
+    TWIN_TOLERANCE).  A preset's chain is filters.PRESETS[name]["filters"];
+    profile_chain(json.load(f)) turns a vipsim_profiles_v2 profile into one.
     """
 
     def __init__(self, env, chain, device="cuda", image_key=None):
@@ -2137,9 +2197,7 @@ class VisualImpairmentWrapper(_Wrapper):
         self.image_key = image_key          # set if obs is a dict
 
     def _filter(self, frame: np.ndarray) -> np.ndarray:
-        x = frames_to_gpu(frame, self.sim.device)
-        for name, kw in self.chain:
-            x = getattr(self.sim, name)(x, **kw)
+        x = self.sim.apply_chain(frames_to_gpu(frame, self.sim.device), self.chain)
         out = gpu_to_frames(x)
         return out[0] if frame.ndim == 3 else out
 
@@ -2162,7 +2220,7 @@ class VisualImpairmentWrapper(_Wrapper):
 # _from_u8 of integer levels).  Check against the CPU with
 # np.testing.assert_array_equal on frames_to_gpu/gpu_to_frames round trips
 # (tests/test_gpu_*.py), or GpuParityCase.assert_close (tests/test_rounding.py:
-# max <= 1 LSB, mean < 0.02) where a twin cannot be exact.
+# max <= 1 LSB, mean < 0.02) where TWIN_TOLERANCE allows it.
 #
 # Where bit-equality is lost, and how to keep it:
 #   * dtypes follow numpy: float32 array op Python float stays float32, but
