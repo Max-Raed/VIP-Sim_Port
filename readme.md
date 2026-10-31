@@ -60,7 +60,7 @@ Only the `vipsim/` package goes into the PyPI release; everything else is for de
 
 ### Install
 
-Requires Python 3.12 or newer.
+Requires Python 3.12 or newer; tested on 3.12 to 3.15. On Python 3.15, scikit-image has no wheel yet (0.26.0 is the latest release), so `vipsim[teichopsia]` and `vipsim[all]` make pip build scikit-image from source, which needs C and C++ compilers.
 
 ```bash
 pip install vipsim                  # CPU reference (numpy, pillow)
