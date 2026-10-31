@@ -10,6 +10,7 @@ import sys
 import unittest
 import warnings
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -22,13 +23,24 @@ from test_rounding import GpuParityCase  # noqa: E402
 
 TRAFFIC = ROOT / "vipsim_assets" / "Trafficscene.png"
 BLUR_SEVERITIES = (0.005, 0.01, 0.02, 0.03, 0.05, 0.2, 0.4, 1.0)
+# Severities where Pillow's float32 box radius or weights (r, ww, fw) round
+# to other pixels than float64 ones would (0.07: the radius; the rest: ww).
+BOX_WEIGHT_SEVERITIES = (0.01, 0.02, 0.025, 0.04, 0.07, 0.225, 0.433, 0.517)
 # (width, height) -> (width, height), PIL order: bloom's /4 and back,
-# pixelation-like odd ratios, one axis only, and degenerate sizes.
+# pixelation-like odd ratios, one axis only, and degenerate sizes.  Then the
+# pass order (see _pil_vertical_first): three pairs that shrink the height by
+# more than twice as many pixels as the width, where Pillow 13 resamples
+# vertically first (bloom's /4 of a portrait frame), and four frames at least
+# 100 times taller than wide, where Pillow 12.2 goes vertical first when the
+# height shrinks: 10x1000 is on its boundary (horizontal first), and the
+# last two pairs go vertical first on 12.2 only.
 RESIZES = [((96, 64), (24, 16)), ((24, 16), (96, 64)), ((84, 84), (21, 21)),
            ((21, 21), (84, 84)), ((97, 61), (20, 20)), ((20, 20), (97, 61)),
            ((96, 64), (96, 16)), ((96, 64), (31, 64)), ((5, 7), (3, 11)),
            ((96, 64), (990, 990)), ((990, 990), (96, 64)), ((1, 1), (5, 4)),
-           ((7, 3), (1, 1))]
+           ((7, 3), (1, 1)), ((40, 96), (10, 24)), ((5, 30), (3, 22)),
+           ((2, 7), (1, 1)), ((10, 1000), (2, 250)), ((10, 1001), (2, 250)),
+           ((10, 1001), (9, 1000)), ((3, 400), (2, 399))]
 
 
 def natural_crop(h, w):
@@ -81,6 +93,71 @@ class TestGpuBlurMatchesPil(GpuPrimitiveCase):
                 gpu = self.vg.gpu_to_frames(self.vg.pil_gaussian_blur(x, radius))[0]
                 np.testing.assert_array_equal(gpu.reshape(a.shape), cpu)
 
+    def test_window_sums_beyond_int32_are_bit_exact(self):
+        # Pillow sums a window of up to 2r + 1 levels in a UINT32: 255s
+        # overflow an int32 from a box radius of ~4.2M px (bloom's blur_size
+        # around 5.6e6).  Measured: 0 where PIL gives 255 before the fix.
+        # Both window-sum paths: int64 (small tensors) and int32 (large).
+        for numel in (self.vg._BOX_BLUR_INT64_NUMEL, 0):
+            for shape, radius in [((1, 1, 3), 4.5e6), ((1, 3, 3), 6e6), ((1, 2, 3), 8e6)]:
+                with self.subTest(int64_numel=numel, shape=shape, radius=radius),                         mock.patch.object(self.vg, "_BOX_BLUR_INT64_NUMEL", numel):
+                    a = np.full(shape, 255, np.uint8)
+                    cpu = np.asarray(Image.fromarray(a).filter(ImageFilter.GaussianBlur(radius)))
+                    x = self.vg.frames_to_gpu(a, self.sim.device)
+                    gpu = self.vg.gpu_to_frames(self.vg.pil_gaussian_blur(x, radius))[0]
+                    np.testing.assert_array_equal(gpu, cpu)
+
+    def test_int32_window_sums_are_bit_exact(self):
+        # Tensors above _BOX_BLUR_INT64_NUMEL sum in int32; force that path.
+        with mock.patch.object(self.vg, "_BOX_BLUR_INT64_NUMEL", 0):
+            for name, frame in self.frames.items():
+                for s in BLUR_SEVERITIES:
+                    with self.subTest(frame=name, severity=s):
+                        cpu = np.asarray(vipsim.apply_blur(Image.fromarray(frame), s))
+                        gpu = self.to_frame(self.sim.blur(self.to_gpu(frame), s))
+                        np.testing.assert_array_equal(gpu, cpu)
+
+    def test_radii_beyond_the_frame_are_counted_not_padded(self):
+        # r >= n: every window is the whole row plus edge copies.  A padded
+        # index would need O(r) memory (35 GiB for bloom's blur_size 1e8).
+        rng = np.random.default_rng(14)
+        for shape, radius in [((5, 3, 3), 1e8), ((1, 7, 3), 1e9), ((7, 1, 3), 2147483583.0),
+                              ((33, 47, 3), 3e7)]:
+            with self.subTest(shape=shape, radius=radius):
+                a = rng.integers(0, 256, shape, dtype=np.uint8)
+                cpu = np.asarray(Image.fromarray(a).filter(ImageFilter.GaussianBlur(radius)))
+                gpu = self.vg.gpu_to_frames(self.vg.pil_gaussian_blur(
+                    self.vg.frames_to_gpu(a, self.sim.device), radius))[0]
+                np.testing.assert_array_equal(gpu, cpu)
+        frame = self.frames["random_84x84"]
+        for blur_size in (3e7, 1e9):
+            with self.subTest(bloom_blur_size=blur_size):
+                cpu = np.asarray(vipsim.apply_bloom(Image.fromarray(frame), 0.5, blur_size=blur_size))
+                gpu = self.to_frame(self.sim.bloom(self.to_gpu(frame), 0.5, blur_size=blur_size))
+                np.testing.assert_array_equal(gpu, cpu)
+
+    def test_box_weights_are_computed_in_float32(self):
+        rng = np.random.default_rng(13)
+        for s in BOX_WEIGHT_SEVERITIES:
+            for seed in range(8):
+                frame = rng.integers(0, 256, (96, 128, 3), dtype=np.uint8)
+                with self.subTest(severity=s, frame=seed):
+                    cpu = np.asarray(vipsim.apply_blur(Image.fromarray(frame), s))
+                    gpu = self.to_frame(self.sim.blur(self.to_gpu(frame), s))
+                    np.testing.assert_array_equal(gpu, cpu)
+
+    def test_invalid_radii_raise_like_pillow_13(self):
+        # Pillow 13 raises these; Pillow 12 segfaults on the same radii.
+        x = self.to_gpu(self.frame)
+        for radius, message in [(np.nan, "radius must be >= 0"), (np.inf, "radius must be >= 0"),
+                                (-np.inf, "radius must be >= 0"),
+                                (2147483584.0, "radius too large"), (-3e9, "radius too large")]:
+            for quantize in (True, False):
+                with self.subTest(radius=radius, quantize=quantize),                         self.assertRaisesRegex(ValueError, message):
+                    self.vg.pil_gaussian_blur(x, radius, quantize=quantize)
+        with self.assertRaisesRegex(ValueError, "radius must be >= 0"):
+            self.sim.blur(x, np.nan)
+
     def test_batch_is_blurred_per_frame(self):
         a, b = self.frames["random_84x84"], self.frames["traffic_84x84"]
         x = self.vg.frames_to_gpu(np.stack([a, b]), self.sim.device)
@@ -90,15 +167,17 @@ class TestGpuBlurMatchesPil(GpuPrimitiveCase):
                 out[i], np.asarray(vipsim.apply_blur(Image.fromarray(frame), 0.2)))
 
     def test_float_variant_is_within_pil_rounding(self):
-        # No per-pass 8-bit rounding: within 1 LSB once the blur is wider than
-        # PIL's rounding error, up to 3 LSB on noise at sub-pixel radii.
+        # No per-pass 8-bit rounding: within 2 LSB from 1.2 px (mostly 1 LSB
+        # above ~2.25 px, 2 at e.g. 2.55 px), up to 3 LSB on noise at
+        # sub-pixel radii.  Radii every 0.05 px from 1.5 to 4 px.
+        dense = tuple(r / 15 for r in np.arange(1.5, 4.0, 0.05))
         for name, frame in self.frames.items():
-            for s in BLUR_SEVERITIES:
+            for s in BLUR_SEVERITIES + dense:
                 with self.subTest(frame=name, severity=s):
                     cpu = np.asarray(vipsim.apply_blur(Image.fromarray(frame), s), int)
                     gpu = self.to_frame(self.vg.pil_gaussian_blur(
                         self.to_gpu(frame), s * 15.0, quantize=False)).astype(int)
-                    self.assertLessEqual(np.abs(gpu - cpu).max(), 1 if s * 15.0 >= 1.5 else 3)
+                    self.assertLessEqual(np.abs(gpu - cpu).max(), 2 if s * 15.0 >= 1.2 else 3)
 
     def test_zero_severity_is_identity(self):
         x = self.to_gpu(self.frame)
@@ -123,6 +202,18 @@ class TestGpuResizeMatchesPil(GpuPrimitiveCase):
                 with self.subTest(src=(w, h), dst=(w2, h2), mode=mode):
                     cpu = np.asarray(Image.fromarray(a).resize((w2, h2), pil_mode))
                     gpu = self.to_frame(self.sim.pil_resize(self.to_gpu(a), w2, h2, mode))
+                    np.testing.assert_array_equal(gpu, cpu)
+
+    def test_tap_by_tap_resample_is_bit_exact(self):
+        # Passes gathering more than _RESAMPLE_GATHER_NUMEL taps add one tap
+        # at a time in int32; force that path on every size pair.
+        rng = np.random.default_rng(3)
+        with mock.patch.object(self.vg, "_RESAMPLE_GATHER_NUMEL", 0):
+            for (w, h), (w2, h2) in RESIZES:
+                a = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+                with self.subTest(src=(w, h), dst=(w2, h2)):
+                    cpu = np.asarray(Image.fromarray(a).resize((w2, h2), Image.BILINEAR))
+                    gpu = self.to_frame(self.sim.pil_resize(self.to_gpu(a), w2, h2))
                     np.testing.assert_array_equal(gpu, cpu)
 
     def test_bloom_downsample_of_natural_crop_is_bit_exact(self):
@@ -270,6 +361,27 @@ class TestGpuCache(GpuPrimitiveCase):
         self.assertEqual((a.dtype, a.device.type), (self.torch.float32, self.sim.device.type))
         self.assertEqual(b.dtype, self.torch.float64)
         np.testing.assert_array_equal(b.cpu().numpy(), field())
+
+    def test_key_tells_equal_values_of_other_types_apart(self):
+        # NEP 50 makes np.float64(0.5) and 0.5 build different CPU fields,
+        # and numpy rejects some equal values (a float seed, a Decimal):
+        # each type gets its own entry, and what _freeze cannot key exactly
+        # is built on every call, never cached.
+        from decimal import Decimal
+        sim = self.vg.VipSimGPU(device=self.sim.device, cache_size=16)
+        n = []
+
+        def field():
+            n.append(1)
+            return np.zeros(1)
+        params = (0.5, np.float64(0.5), np.float32(0.5), np.array(0.5), 1, 1.0,
+                  True, -0.0, 0.0, Decimal("0.5"), Decimal("0.5"))
+        for p in params:
+            sim.numpy_field("f", {"severity": p}, (1, 1), field)
+        self.assertEqual((len(n), len(sim.cache)), (len(params), len(params) - 2))
+        for p in params[:-2]:                   # all hits now
+            sim.numpy_field("f", {"severity": p}, (1, 1), field)
+        self.assertEqual(len(n), len(params))
 
     def test_numpy_field_tuple_and_dtypes(self):
         sy, sx, m = self.sim.numpy_field(

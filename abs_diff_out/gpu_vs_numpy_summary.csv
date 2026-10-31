@@ -1,5 +1,22 @@
-filter,gpu_kwargs,mae_mean,ssim,ssim_blur
-cvd,"{""severity"": 0.6}",0.0,1.0,1.0
-bcg,"{""brightness"": 0.75, ""contrast"": 1.25, ""gamma"": 1.0}",0.0,1.0,1.0
-blur,"{""severity"": 0.4}",0.455,0.9973,0.9997
-vortex,"{""severity"": 0.5}",54.903,0.2406,0.4798
+filter,kwargs,max_abs_diff,mean_abs_diff,tol_max,tol_mean,within_tolerance,ssim,ssim_blur
+blur,"{""severity"": 0.4}",0,0.0,0,0.0,True,1.0,1.0
+cvd,"{""cvd_type"": ""deuteranomaly"", ""severity"": 0.6}",0,0.0,1,0.02,True,1.0,1.0
+bcg,"{""brightness"": 0.75, ""contrast"": 1.25, ""gamma"": 1.0}",0,0.0,1,0.02,True,1.0,1.0
+cataracts,"{""severity"": 0.4}",0,0.0,0,0.0,True,1.0,1.0
+bloom,"{""intensity"": 2.0, ""threshold"": 0.3, ""blur_size"": 1.0, ""iterations"": 1}",0,0.0,0,0.0,True,1.0,1.0
+field_loss,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+distortion,"{""severity"": 1.0}",0,0.0,0,0.0,True,1.0,1.0
+double_vision,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+detail_loss,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+pixelation,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+led,"{""scale"": 80.0, ""brightness"": 1.0, ""shape"": 1.5, ""margin"": 0.0, ""automatic_ratio"": true}",0,0.0,0,0.0,True,1.0,1.0
+vortex,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+wiggle,"{""freq"": 12.0, ""amplitude"": 0.03, ""severity"": 1.0, ""mode"": ""complex"", ""timer"": 1.0}",0,0.0,0,0.0,True,1.0,1.0
+noise,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+glitch,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0
+teichopsia,"{""severity"": 0.75, ""lum_contribution"": 0.75}",0,0.0,0,0.0,True,1.0,1.0
+foveal_darkness,"{""severity"": 0.5}",0,0.0,1,0.02,True,1.0,1.0
+nystagmus,"{""severity"": 1.0}",0,0.0,0,0.0,True,1.0,1.0
+flickering_stars,"{""n_stars"": 15, ""severity"": 1.0}",0,0.0,0,0.0,True,1.0,1.0
+floaters,"{""n_floaters"": 50000, ""mode"": ""dark"", ""floater_size"": 1, ""circle_radius_uv"": 0.146, ""severity"": 1.0}",0,0.0,0,0.0,True,1.0,1.0
+vignette,"{""severity"": 0.5}",0,0.0,0,0.0,True,1.0,1.0

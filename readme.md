@@ -27,7 +27,7 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 
 - **20 visual-impairment filters** spanning color, optical, field-loss, distortion, and time-varying effects.
 - **24 clinical presets** that map named conditions (e.g. *macular degeneration*, *diplopia*, *scintillating scotoma*) to ready-made filter chains.
-- **Two backends** — a NumPy/PIL reference (`vipsim.filters`) and a batched PyTorch port (`vipsim.gpu`). The GPU port currently covers `cvd` (deuteranomaly), `bcg` and `blur`; its `vortex` is a placeholder swirl, not the CPU filter.
+- **Two backends** — a NumPy/PIL reference (`vipsim.filters`) and a batched PyTorch port (`vipsim.gpu`). The GPU port covers every filter, preset and profile, with the CPU's keyword arguments, and reproduces the CPU output bit for bit wherever it has been tested (see [Under the hood](#-under-the-hood-gpu-port)).
 - **Checked against Unity** — 17 of 19 tracked filters pass the repo's SSIM_blur criterion against matched Unity captures; read the [caveats](#-validation) before citing this.
 - **Drop-in Gym/MyoSuite wrapper** for applying impairment chains to RL observations on-device.
 - **Zero-dependency CLI** for one-off image processing.
@@ -37,7 +37,7 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 | File | Role |
 |---|---|
 | `vipsim/filters.py` | CPU reference implementation — 20 filters, 24 presets, and a CLI. The source of truth for behavior. |
-| `vipsim/gpu.py` | PyTorch port operating on batched, channels-first tensors `[N, 3, H, W]`. Includes a Gym/MyoSuite observation wrapper. |
+| `vipsim/gpu.py` | PyTorch port of every filter, operating on batched, channels-first tensors `[N, 3, H, W]` and matching the CPU output. Runs presets and profiles; includes a Gym/MyoSuite observation wrapper. |
 | `vipsim_filters.py`, `vipsim_gpu.py` | Aliases so in-repo scripts and older commands keep working; not part of the installed package. |
 | `pyproject.toml` | Package metadata for `pip install` / PyPI (distribution name `vipsim`). |
 | `vipsim_equivalence_report.md` | The validation document: how the Python port is shown to reproduce the Unity shaders, with methods, metrics, and results. |
@@ -96,17 +96,21 @@ out.save("scene_impaired.png")
 
 ### GPU / batched
 
-The PyTorch port works on a whole batch of frames at once and keeps everything on-device. Image-independent data (warp fields, blur kernels, masks) is precomputed once per `(severity, H, W)` and cached.
+The PyTorch port works on a whole batch of frames at once and keeps everything on-device. Every filter is a `VipSimGPU` method with the CPU name and keyword arguments (`sim.cvd(x, cvd_type=..., severity=...)` is `apply_cvd(img, cvd_type=..., severity=...)` on a batch). Image-independent data (warp fields, index maps, masks, lookup tables) is computed once per parameter set and frame size by the CPU's own NumPy code and kept in a bounded on-device cache.
 
 ```python
+import json
 import torch
-from vipsim.gpu import VipSimGPU
+from vipsim.gpu import VipSimGPU, frames_to_gpu, gpu_to_frames
 
 sim = VipSimGPU(device="cuda")
-x = torch.rand(8, 3, 256, 256, device="cuda")   # batch of 8 frames in [0,1]
+x = frames_to_gpu(frames, sim.device)           # frames: [N, H, W, 3] uint8 -> [N, 3, H, W] in [0,1]
 
-x = sim.cvd(x, severity=0.8)
+x = sim.cvd(x, cvd_type="deuteranomaly", severity=0.8)
 x = sim.blur(x, severity=0.4)
+x = sim.apply_preset(x, "macular_degeneration")
+x = sim.apply_profile(x, json.load(open("vipsim_profiles_v2/p3.json")))
+out = gpu_to_frames(x)                          # back to uint8, same pixels as the CPU chain
 ```
 
 ### Inside an RL / MyoSuite environment
@@ -121,6 +125,8 @@ env = VisualImpairmentWrapper(
     image_key=None,        # set this if the observation is a dict
 )
 ```
+
+`chain` takes any filter with its CPU keyword arguments; `vipsim.PRESETS[name]["filters"]` is a ready chain, and `vipsim.gpu.profile_chain(profile)` turns a `vipsim_profiles_v2` profile into one.
 
 ## 🎛️ Filter catalogue
 
@@ -193,13 +199,26 @@ to switch them off without deleting them; all scripts in this repo honor that.
 
 ## 🔬 Under the hood (GPU port)
 
-The PyTorch backend is built around **three primitives**, which is why it stays fast and batched. So far `cvd`, `bcg` and `blur` are ported (`cvd` and `bcg` are checked against the CPU reference by `tests/`, `blur` only by `validation_scripts/validate_gpu_vs_numpy.py`); the list below is how the remaining filters map onto the primitives:
+All 21 filters of `vipsim.filters` (the catalogue above plus `vignette`) are ported. The CPU filters are the reference: each GPU twin reproduces today's CPU output, quirks included (nearest-index truncation, 8-bit intermediates, Pillow's integer arithmetic), and has been **bit-exact** with it in every comparison so far, on CUDA and on CPU torch, with Pillow 12.2 and 13. The CPU only ever sees a uint8 image, so each twin reads its input as 8-bit levels and returns `level / 255`: a chain of GPU filters sees exactly the CPU chain's images. One exception concerns batches: a stochastic filter seeded with a shared `numpy.random.Generator` (or `None`) draws one field per frame, in batch order, so a batched chain of two such filters consumes the draws filter by filter (it equals running each CPU filter over the whole batch in turn, not the CPU chain frame by frame). Fixed integer seeds, one Generator per filter, or one frame per call (as in the wrapper) avoid this.
 
-1. **Elementwise / 3×3 matmul** → `einsum` + arithmetic — *cvd, bcg, monochrome, noise, posterize, tint…*
-2. **Separable blur / pooling** → `conv2d`, `avg_pool2d` — *blur, bloom, field-loss mip pyramids, cataract frost…*
-3. **Per-pixel UV displacement** → `F.grid_sample` — *distortion, vortex, wiggle, double vision, nystagmus…*
+There are no custom kernels. The backend is built from a few primitives:
 
-Anything that doesn't depend on the image content (warp grids, masks, Gaussian kernels) is computed **once** per `(severity, H, W)` and cached on the device, so per-frame work is minimal.
+1. **Per-level tables and channel mixes.** Every step that maps one channel value to another (sRGB ↔ linear, `pow`, brightness/contrast/gamma, posterize, the floaters' blend) is the CPU's own NumPy code, evaluated once on the 256 levels and looked up on the device; torch's `pow` is about 1 ulp off NumPy's, which is enough to flip 8-bit levels. Three-channel mixes (the `cvd` matrices, luminance) add their products in the order NumPy's BLAS does.
+2. **Pillow-exact blur and resize.** `pil_gaussian_blur` replays `ImageFilter.GaussianBlur` (three extended-box passes per axis in 24-bit fixed point, each rounded to 8 bits) with cumulative sums in integers, so its cost does not grow with the radius. `VipSimGPU.pil_resize` replays Pillow's BILINEAR and NEAREST resamplers, including the installed Pillow's pass order (12.2 and 13 differ). Neither uses `conv2d`, which runs in TF32 by default on Ampere and later GPUs. They serve `blur`, `bloom`, the `field_loss` pyramid and `pixelation`.
+3. **Pixel gathers.** `gather_nearest` and `gather_bilinear` replace NumPy fancy indexing for `distortion`, `wiggle`, `vortex`, the cataract frost and the `led` cells; slices and rolls cover `double_vision`, `nystagmus` and `glitch`.
+
+Anything that doesn't depend on the image content (index maps, masks, noise fields, tables) is computed **once** per parameter set and frame size by the CPU's NumPy code, seeded RNG included, and kept in a bounded LRU cache on the device, so per-frame work is a few batched tensor operations. Cache keys are exact and typed: under NumPy 2, `np.float64(0.5)` and `0.5` can give different CPU results, so they never share an entry.
+
+**What is checked.**
+
+- `tests/test_gpu_*.py` compare every GPU filter with its CPU filter pixel for pixel. They use random and natural frames at several sizes (odd, portrait, 1 pixel wide and very tall), severities near 0 and 1, every keyword argument (NumPy scalar types included), batches of different frames, other input dtypes, cache reuse, and the CPU's exceptions for invalid input.
+- `tests/test_gpu_primitives.py` checks the blur and resize against Pillow itself and the gathers against NumPy indexing.
+- `tests/test_gpu_profiles.py` renders all 7 profiles (as `render_profiles_v2.py` does) on both backends step by step and end to end, and all 24 presets end to end.
+- `validation_scripts/validate_gpu_vs_numpy.py` runs every ported filter on the 2048×1024 scene and exits with an error if one exceeds its documented tolerance (`vipsim.gpu.TWIN_TOLERANCE`; results in `abs_diff_out/gpu_vs_numpy_summary.*`) or is skipped for a missing optional dependency (`--allow-skip` accepts that). The tolerance is 0 levels for every filter except `cvd`, `bcg` and `foveal_darkness`, which may differ by 1 level on another BLAS build, because it can sum their channel mix in a different order. The tolerance is per filter, so `foveal_darkness` gets it in every mode, although only `mode="desat"` mixes channels.
+
+Because the GPU port equals the NumPy port, it inherits the NumPy port's validation against Unity (below).
+
+**Speed.** In the port's verification runs on an RTX 4050 Laptop GPU, one 2048×1024 frame took 3–30 ms per filter (0.1–0.2 s for `field_loss`), against 0.01–2.5 s for the NumPy filter. A batch of 64 frames of 84×84 cost about as much as one frame for most filters; a single small frame is launch-bound and no faster than NumPy. `pixelation` is the exception: like the CPU, it resamples to a grid of cells that does not shrink with the frame (about 510 cells across at the default severity, 800 at severity 0.2), so a batch of 64 frames of 84×84 takes about 0.1–0.2 s and up to 2 GB of GPU memory. The first call with new parameters or a new frame size runs the CPU code to build the cached fields: up to about 1.5 s at 2048×1024 for `vortex`. The cache is bounded by entries, not bytes, so a sweep over many parameter sets at full resolution can hold several GB of fields.
 
 ## ✅ Validation
 
@@ -238,7 +257,10 @@ python validation_scripts/validate_nystagmus_burst.py
 
 ```bash
 python -m unittest discover -s tests -v
+python validation_scripts/validate_gpu_vs_numpy.py   # GPU vs NumPy on the 2048x1024 scene
 ```
+
+The GPU tests run on CUDA when it is available, else on CPU torch, and are skipped without torch.
 
 ### Releasing to PyPI
 
