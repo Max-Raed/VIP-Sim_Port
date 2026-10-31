@@ -156,6 +156,8 @@ def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
     # np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055),
     # evaluated in place: the same arithmetic per element, fewer temporaries.
     out = np.power(x, 1.0 / 2.4)
+    if not isinstance(out, np.ndarray):  # scalar or 0-d input
+        return np.where(x <= 0.0031308, x * 12.92, 1.055 * out - 0.055)
     out *= 1.055
     out -= 0.055
     np.multiply(x, 12.92, out=out, where=x <= 0.0031308)
@@ -169,6 +171,8 @@ def _to_uint8(x: np.ndarray, scale: float = 255.0) -> np.ndarray:
     darker, and the bias accumulates when filters are chained.
     """
     y = np.multiply(x, scale)
+    if not (isinstance(y, np.ndarray) and y.dtype.kind == "f"):
+        return np.clip(np.rint(np.asarray(x) * scale), 0, 255).astype(np.uint8)
     np.rint(y, out=y)
     np.clip(y, 0, 255, out=y)
     return y.astype(np.uint8)
@@ -1086,7 +1090,7 @@ def apply_led(img: Image.Image, severity: float = 0.5,
     mask = (1.0 - c) + c * s
     # Unity renders this shader in linear color space; apply the mask in
     # linear and convert back to sRGB so cell-centre brightness matches.
-    if brightness == 1 and pixelated.dtype == np.float32:
+    if np.ndim(brightness) == 0 and brightness == 1 and pixelated.dtype == np.float32:
         # Unscaled cells are still 8-bit levels: decode them by table.
         lin = _image_to_linear(levels[sy[:, None], sx[None, :]])
     else:
@@ -1214,10 +1218,17 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
     reach_up = reach / abs(ys_up) if ys_up else np.inf
     reach_dn = reach / abs(ys_dn) if ys_dn else np.inf
     # |dx| < reach  <=>  |col + 0.5 - cx * w| < reach * h, likewise for rows
-    c0 = int(max(0, np.floor(cx * w - 0.5 - reach * h) - 2))
-    c1 = int(min(w, np.ceil(cx * w - 0.5 + reach * h) + 3))
-    r0 = int(max(0, np.floor(cy * h - 0.5 - reach_up * h) - 2))
-    r1 = int(min(h, np.ceil(cy * h - 0.5 + reach_dn * h) + 3))
+    bounds = (np.floor(cx * w - 0.5 - reach * h) - 2,
+              np.ceil(cx * w - 0.5 + reach * h) + 3,
+              np.floor(cy * h - 0.5 - reach_up * h) - 2,
+              np.ceil(cy * h - 0.5 + reach_dn * h) + 3)
+    if all(np.ndim(b) == 0 for b in bounds) and np.all(np.isfinite(bounds)):
+        c0 = int(min(w, max(0, bounds[0])))
+        c1 = int(max(0, min(w, bounds[1])))
+        r0 = int(min(h, max(0, bounds[2])))
+        r1 = int(max(0, min(h, bounds[3])))
+    else:  # non-finite centre/reach, or array-valued kwargs: whole frame
+        r0, r1, c0, c1 = 0, h, 0, w
     box = (slice(r0, r1), slice(c0, c1))
 
     ys_norm = (np.arange(h, dtype=np.float32) + 0.5) / h
@@ -1776,8 +1787,19 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
     if len(sizes) == 0:  # no blobs, no draws
         return
     h, w = out.shape[:2]
-    s_x = np.maximum(1, np.rint(sizes * w / overlay_size).astype(int))
-    s_y = np.maximum(1, np.rint(sizes * h / overlay_size).astype(int))
+    f_x = np.asarray(sizes * w / overlay_size, dtype=np.float64)
+    f_y = np.asarray(sizes * h / overlay_size, dtype=np.float64)
+    bad = ~(np.isfinite(f_x) & np.isfinite(f_y)
+            & (np.abs(f_x) < 2.0 ** 63) & (np.abs(f_y) < 2.0 ** 63))
+    if bad.any():
+        # astype(int) would wrap these to INT64_MIN; raise what the old
+        # per-blob int(round(...)) raised on the first one instead.
+        i = np.argmax(bad)
+        for f in (f_x[i], f_y[i]):
+            round(float(f))      # ValueError for NaN, OverflowError for inf
+        raise OverflowError("int too big to convert")
+    s_x = np.maximum(1, np.rint(f_x).astype(np.int64))
+    s_y = np.maximum(1, np.rint(f_y).astype(np.int64))
     hx, hy = s_x // 2, s_y // 2
     x0, x1 = np.maximum(0, xs - hx), np.minimum(w, xs + hx + 1)
     y0, y1 = np.maximum(0, ys - hy), np.minimum(h, ys + hy + 1)

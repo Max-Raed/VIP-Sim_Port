@@ -74,6 +74,22 @@ class TestSrgbConversions(unittest.TestCase):
                     np.testing.assert_array_equal(vf._to_uint8(xs, scale),
                                                   to_uint8_reference(xs, scale))
 
+    def test_scalars_and_integer_arrays_match_reference(self):
+        # The in-place paths need a float array; anything else takes the
+        # plain expression, as before.
+        for x, scale in [(np.float64(0.5), 255.0), (0.5, 255.0), (np.array(0.5), 255.0),
+                         (np.array([3, 300]), 1)]:
+            with self.subTest(x=x, scale=scale):
+                got = vf._to_uint8(x, scale)
+                np.testing.assert_array_equal(got, to_uint8_reference(x, scale))
+                self.assertEqual(got.dtype, np.uint8)
+        for x in (0.5, np.float32(0.002), np.array(0.5)):
+            with self.subTest(x=x):
+                want = np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1.0 / 2.4) - 0.055)
+                got = vf._linear_to_srgb(x)
+                np.testing.assert_array_equal(got, want)
+                self.assertEqual(np.asarray(got).dtype, want.dtype)
+
     def test_8bit_levels_survive_decode_to_float_and_back(self):
         # apply_vortex copies pixels outside its field straight from the input.
         levels = np.arange(256, dtype=np.uint8)
@@ -130,6 +146,20 @@ class TestFloaterBlobs(unittest.TestCase):
     def test_float_sizes_and_no_blobs(self):
         self.check(31, 45, 500, [2.5, 3.0, 6.5], 0.7, 0.0, seed=5)
         self.check(31, 45, 0, [2], 0.7, 0.0, seed=6)
+
+    def test_sizes_that_cannot_be_converted_raise_like_the_loop(self):
+        # apply_floaters(floater_size=nan/inf/1e30, size_variance=True).
+        for bad in (np.nan, np.inf, 1e30):
+            out = np.zeros((31, 45, 3), np.float32)
+            xs, ys = np.array([3, 10, 20]), np.array([4, 5, 6])
+            sizes = np.array([2.0, bad, 3.0])
+            with self.subTest(size=bad):
+                with self.assertRaises(Exception) as want:
+                    paint_blobs_reference(out.copy(), xs, ys, sizes,
+                                          np.random.default_rng(0), 0.5, 255.0)
+                with self.assertRaises(type(want.exception)):
+                    vf._paint_blobs(out.copy(), xs, ys, sizes,
+                                    np.random.default_rng(0), 0.5, 255.0)
 
 
 def blend_reference(arr, bias, n_levels):
@@ -375,6 +405,13 @@ class TestVortexBoundingBox(unittest.TestCase):
          "inner_circle_radius": 0.006, "inner_color": 1, "inner_center": (0.494, 0.549),
          "inner_fade": 0, "halo_radius": 0.004, "halo_thickness": 0.03,
          "halo_opacity": 0.68, "halo_center": (0.506, 0.61)},
+        # Non-finite bounds and array kwargs (a gym action slice) get the
+        # whole frame, as before the bounding box.
+        {"center": (0.5, np.inf)},
+        {"center": (np.inf, 0.5)},
+        {"center": (0.5, 1e308)},
+        {"vortex_radius": np.array([0.3])},
+        {"noise_amount": np.array([0.1])},
     ]
 
     def test_matches_full_frame(self):
@@ -386,6 +423,18 @@ class TestVortexBoundingBox(unittest.TestCase):
                         want = vortex_reference(img, sev, **kw)
                         got = vf.apply_vortex(img, sev, **kw)
                         np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+
+class TestLedBrightness(unittest.TestCase):
+    def test_array_brightness_takes_the_general_path(self):
+        # The fast path is for brightness == 1 only; a per-channel array
+        # must reach the general expression, as a list does.
+        img = noise_image(40, 56, seed=9)
+        for b in ([0.5, 1.0, 1.0], [1.0, 1.0, 1.0]):
+            with self.subTest(brightness=b):
+                np.testing.assert_array_equal(
+                    np.asarray(vf.apply_led(img, 0.6, brightness=np.array(b))),
+                    np.asarray(vf.apply_led(img, 0.6, brightness=b)))
 
 
 if __name__ == "__main__":
