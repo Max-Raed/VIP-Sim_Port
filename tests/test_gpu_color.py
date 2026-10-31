@@ -180,8 +180,10 @@ class TestGpuBcg(GpuColorCase):
                    ("srgb", 0.0): [[1, 69, 13], [1, 178, 69], [1, 179, 253], [2, 125, 134],
                                    [3, 45, 231], [3, 126, 135], [3, 235, 191], [4, 100, 168]]}
         for (color_space, saturation), colours in columns.items():
-            column = {"column": np.array(colours, np.uint8)[:, None, :]}
-            self.check("bcg", self.exact_dots, column, color_space=color_space,
+            column = np.array(colours, np.uint8)[:, None, :]
+            # One pixel wide numpy uses sdot; two wide, sgemv.
+            frames = {"column": column, "two_columns": np.repeat(column, 2, axis=1)}
+            self.check("bcg", self.exact_dots, frames, color_space=color_space,
                        saturation=saturation)
 
     def test_nan_saturation_matches_cpu(self):

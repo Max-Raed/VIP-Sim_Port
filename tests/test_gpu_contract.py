@@ -1,9 +1,11 @@
 """Promises every GPU twin makes, checked across all of them at once.
 
 Each twin clamps severity like its CPU filter, keys its cached fields by
-every keyword it reads, and returns level/255 in x's dtype; the conversion
-helpers take only what the CPU filters take and hand back what they return;
-profile_chain rejects what render_profiles_v2.apply_stack rejects.
+the keywords it reads (one changed keyword per caching twin here; the
+per-filter files change the others), and returns level/255 in x's dtype; the
+conversion helpers take only what the CPU filters take and hand back what
+they return; profile_chain rejects what render_profiles_v2.apply_stack
+rejects; the validator fails on a skip unless told otherwise.
 Runs on CUDA when available, else on the CPU; skipped without torch.
 
 Run from the repo root:  python -m unittest discover -s tests -v
@@ -11,12 +13,15 @@ Run from the repo root:  python -m unittest discover -s tests -v
 import importlib.util
 import inspect
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
 
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vipsim  # noqa: E402
 from vipsim import filters  # noqa: E402
@@ -83,7 +88,17 @@ class TestEveryTwin(GpuContractCase):
                  ("foveal_darkness", {"severity": 0.6, "invert": True}, {"band_width": 0.2}),
                  ("cataracts", {"severity": 0.5}, {"contrast_coeff": (0.3, 0.5, 0.9)}),
                  ("floaters", {"severity": 0.5, "distribution": "gaussian",
-                               "spread_x": 0.3, "spread_y": 0.05}, {"angle": 45.0})]
+                               "spread_x": 0.3, "spread_y": 0.05}, {"angle": 45.0}),
+                 ("field_loss", {"severity": 0.6, "overlay_scale": 0.75}, {"overlay_scale": 1.8}),
+                 ("led", {"severity": 0.6}, {"margin": 0.2}),
+                 ("wiggle", {"severity": 0.8}, {"timer": 1.5}),
+                 ("glitch", {"severity": 0.7, "seed": 3}, {"max_displace": 0.3}),
+                 ("vignette", {"severity": 0.6}, {"softness": 0.1}),
+                 ("bcg", {"brightness": 0.8, "contrast": 1.2}, {"color_space": "srgb"}),
+                 ("distortion", {"severity": 0.8},
+                  {"warp_centers": [(0.3, 0.6, 0.2, 0.9)]}),
+                 ("flickering_stars", {"severity": 0.8, "seed": 2}, {"n_stars": 40}),
+                 ("pixelation", {"severity": 0.9}, {"grid_offset_x": 0.3})]
         if HAVE_SKIMAGE:
             cases.append(("teichopsia", {}, {"gaze": (0.3, 0.7)}))
         frame = np.random.default_rng(1).integers(0, 256, (96, 128, 3), dtype=np.uint8)
@@ -91,7 +106,7 @@ class TestEveryTwin(GpuContractCase):
             with self.subTest(filter=name, change=change):
                 sim = self.vg.VipSimGPU(device=self.sim.device)
                 self.assert_matches_cpu(name, frame, sim, **kw)
-                self.assert_matches_cpu(name, frame, sim, **kw, **change)
+                self.assert_matches_cpu(name, frame, sim, **{**kw, **change})
 
     def test_tolerances_are_the_documented_ones(self):
         # test_gpu_profiles and the validator read their bounds from here.
@@ -117,10 +132,14 @@ class TestConversionHelpers(GpuContractCase):
 
     def test_gpu_to_frames_returns_c_contiguous_frames(self):
         # Like the CPU filters' np.asarray(img): memoryview casts and
-        # torch.from_numpy(...).view(-1) need a contiguous buffer.
-        out = self.vg.gpu_to_frames(self.vg.frames_to_gpu(self.frame, self.sim.device))
+        # torch.from_numpy(...).view(-1) need a contiguous buffer.  A
+        # filter's output is NCHW-contiguous (frames_to_gpu's own output is
+        # channels-last, which would come back contiguous anyway).
+        x = self.vg.frames_to_gpu(self.frame, self.sim.device)
+        out = self.vg.gpu_to_frames(self.sim.blur(x, 0.3))
         self.assertTrue(out.flags.c_contiguous)
-        np.testing.assert_array_equal(out[0], self.frame)
+        np.testing.assert_array_equal(
+            out[0], np.asarray(vipsim.apply_blur(Image.fromarray(self.frame), 0.3)))
         memoryview(out[0]).cast("B")
 
 
@@ -138,6 +157,53 @@ class TestProfileChain(GpuContractCase):
             {"filter": "nonexistent", "_disabled": True},
             {"filter": "bcg", "severity": 0.5, "brightness": 0.8}]})
         self.assertEqual(chain, [("blur", {"severity": 0.3}), ("bcg", {"brightness": 0.8})])
+
+
+class TestValidatorGate(GpuContractCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        spec = importlib.util.spec_from_file_location(
+            "validate_gpu_vs_numpy", ROOT / "validation_scripts" / "validate_gpu_vs_numpy.py")
+        cls.validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.validator)
+
+    def test_only_a_missing_scikit_image_counts_as_optional(self):
+        missing = ModuleNotFoundError("No module named 'skimage'", name="skimage.draw")
+        chained = ImportError("teichopsia needs scikit-image")
+        chained.__cause__ = missing
+        for e, optional in ((missing, True), (chained, True),
+                            (ImportError("cannot import name '_x' from 'vipsim.filters'"), False),
+                            (ModuleNotFoundError("No module named 'scipy'", name="scipy"), False)):
+            with self.subTest(error=repr(e)):
+                self.assertIs(self.validator._missing_optional_dep(e), optional)
+
+    def run_validator(self, extra, failing):
+        """main() on a small frame with the CPU filters in `failing` replaced."""
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame.png"
+            Image.fromarray(gradient_frame(24, 32)).save(frame)
+            argv = ["validate_gpu_vs_numpy.py", "--input", str(frame), "--out", tmp,
+                    "--device", str(self.sim.device)] + extra
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.dict(filters._FILTER_DISPATCH, failing), \
+                    mock.patch("builtins.print"):
+                self.validator.main()
+
+    def test_a_skip_fails_the_run_unless_allowed(self):
+        def no_skimage(*args, **kwargs):
+            raise ModuleNotFoundError("No module named 'skimage'", name="skimage")
+        for extra, code in (([], 1), (["--allow-skip"], 0)):
+            with self.subTest(argv=extra), self.assertRaises(SystemExit) as done:
+                self.run_validator(extra, {"teichopsia": no_skimage})
+            self.assertEqual(done.exception.code, code)
+
+    def test_other_import_errors_fail_the_run(self):
+        # A broken import inside a twin or filter is a bug, not a skip.
+        def broken(*args, **kwargs):
+            raise ImportError("cannot import name '_x' from 'vipsim.filters'")
+        with self.assertRaisesRegex(ImportError, "cannot import name"):
+            self.run_validator(["--allow-skip"], {"blur": broken})
 
 
 if __name__ == "__main__":

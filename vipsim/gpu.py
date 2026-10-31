@@ -215,6 +215,8 @@ def _box_blur_pass(t: torch.Tensor, r: int, ww: int, fw: int,
     does not grow with the radius.
     """
     n = t.shape[dim]
+    if r >= n:
+        return _box_blur_pass_whole_row(t, r, ww, fw, dim)
     p = t.index_select(dim, _box_blur_index(n, r, t.device))  # p[k] = in[clamp(k - r - 1)]
     edges = p.narrow(dim, 0, n) + p.narrow(dim, 2 * r + 2, n)  # in[x-r-1], in[x+r+1]
     if t.is_floating_point():
@@ -236,6 +238,30 @@ def _box_blur_pass(t: torch.Tensor, r: int, ww: int, fw: int,
     return bulk if wide else bulk.int()
 
 
+def _box_blur_pass_whole_row(t: torch.Tensor, r: int, ww: int, fw: int,
+                             dim: int) -> torch.Tensor:
+    """_box_blur_pass for r >= n: every window then covers the whole row,
+    plus r - x copies of in[0] and x + r + 1 - n copies of in[n - 1], and
+    both edge taps are in[0] and in[n - 1].  Counted instead of padded, so
+    a huge radius (bloom's blur_size) costs no O(r) index or memory."""
+    n = t.shape[dim]
+    shape = [1] * t.dim()
+    shape[dim] = n
+    x = torch.arange(n, device=t.device).view(shape)
+    if t.is_floating_point():
+        first, last = t.narrow(dim, 0, 1), t.narrow(dim, n - 1, 1)
+        acc = (r - x) * first + t.sum(dim, keepdim=True) + (x + r + 1 - n) * last
+        return (acc * ww + (first + last) * fw) / (1 << 24)
+    wide = t.numel() <= _BOX_BLUR_INT64_NUMEL
+    t = t.long()
+    first, last = t.narrow(dim, 0, 1), t.narrow(dim, n - 1, 1)
+    bulk = (r - x) * first + t.sum(dim, keepdim=True) + (x + r + 1 - n) * last
+    if 255 * (2 * r + 1) > 0xFFFFFFFF:   # Pillow's UINT32 window sum wraps
+        bulk.bitwise_and_(0xFFFFFFFF)
+    bulk = bulk.mul_(ww).add_(first + last, alpha=fw).add_(1 << 23).bitwise_right_shift_(24)
+    return bulk if wide else bulk.int()
+
+
 def pil_gaussian_blur(x: torch.Tensor, radius: float, quantize: bool = True,
                       passes: int = 3) -> torch.Tensor:
     """Twin of PIL `img.filter(ImageFilter.GaussianBlur(radius))`.
@@ -246,8 +272,9 @@ def pil_gaussian_blur(x: torch.Tensor, radius: float, quantize: bool = True,
     difference 0, tests/test_gpu_primitives.py).  quantize=False runs the
     same box cascade in float64 without the per-pass rounding, for float data
     that never goes through a uint8 image; against PIL on 8-bit input it is
-    within 1 LSB from radius 2.25 px, 2 LSB at 1.2-2 px and up to 3 LSB on
-    noise at sub-pixel radii, where PIL's six roundings outweigh the blur.
+    within 2 LSB from radius 1.2 px (mostly 1 LSB above ~2.25 px) and up to
+    3 LSB on noise at sub-pixel radii, where PIL's six roundings outweigh
+    the blur.
     """
     if quantize:
         return _from_u8(_blur_levels(_u8(x), radius, passes), x.dtype)

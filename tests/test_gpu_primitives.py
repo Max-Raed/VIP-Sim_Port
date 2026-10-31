@@ -23,9 +23,9 @@ from test_rounding import GpuParityCase  # noqa: E402
 
 TRAFFIC = ROOT / "vipsim_assets" / "Trafficscene.png"
 BLUR_SEVERITIES = (0.005, 0.01, 0.02, 0.03, 0.05, 0.2, 0.4, 1.0)
-# Severities whose float32 box weights (r, ww, fw), as Pillow computes them,
-# differ from float64 ones.
-BOX_WEIGHT_SEVERITIES = (0.061, 0.068, 0.07, 0.072, 0.077, 0.079, 0.08)
+# Severities where Pillow's float32 box radius or weights (r, ww, fw) round
+# to other pixels than float64 ones would (0.07: the radius; the rest: ww).
+BOX_WEIGHT_SEVERITIES = (0.01, 0.02, 0.025, 0.04, 0.07, 0.225, 0.433, 0.517)
 # (width, height) -> (width, height), PIL order: bloom's /4 and back,
 # pixelation-like odd ratios, one axis only, and degenerate sizes.  Then the
 # pass order (see _pil_vertical_first): three pairs that shrink the height by
@@ -117,6 +117,25 @@ class TestGpuBlurMatchesPil(GpuPrimitiveCase):
                         gpu = self.to_frame(self.sim.blur(self.to_gpu(frame), s))
                         np.testing.assert_array_equal(gpu, cpu)
 
+    def test_radii_beyond_the_frame_are_counted_not_padded(self):
+        # r >= n: every window is the whole row plus edge copies.  A padded
+        # index would need O(r) memory (35 GiB for bloom's blur_size 1e8).
+        rng = np.random.default_rng(14)
+        for shape, radius in [((5, 3, 3), 1e8), ((1, 7, 3), 1e9), ((7, 1, 3), 2147483583.0),
+                              ((33, 47, 3), 3e7)]:
+            with self.subTest(shape=shape, radius=radius):
+                a = rng.integers(0, 256, shape, dtype=np.uint8)
+                cpu = np.asarray(Image.fromarray(a).filter(ImageFilter.GaussianBlur(radius)))
+                gpu = self.vg.gpu_to_frames(self.vg.pil_gaussian_blur(
+                    self.vg.frames_to_gpu(a, self.sim.device), radius))[0]
+                np.testing.assert_array_equal(gpu, cpu)
+        frame = self.frames["random_84x84"]
+        for blur_size in (3e7, 1e9):
+            with self.subTest(bloom_blur_size=blur_size):
+                cpu = np.asarray(vipsim.apply_bloom(Image.fromarray(frame), 0.5, blur_size=blur_size))
+                gpu = self.to_frame(self.sim.bloom(self.to_gpu(frame), 0.5, blur_size=blur_size))
+                np.testing.assert_array_equal(gpu, cpu)
+
     def test_box_weights_are_computed_in_float32(self):
         rng = np.random.default_rng(13)
         for s in BOX_WEIGHT_SEVERITIES:
@@ -148,17 +167,17 @@ class TestGpuBlurMatchesPil(GpuPrimitiveCase):
                 out[i], np.asarray(vipsim.apply_blur(Image.fromarray(frame), 0.2)))
 
     def test_float_variant_is_within_pil_rounding(self):
-        # No per-pass 8-bit rounding: within 1 LSB once the blur is wider than
-        # PIL's rounding error (2.25 px), 2 LSB at 1.2-2 px (radii 1.5, 1.8
-        # and 2 below), up to 3 LSB on noise at sub-pixel radii.
+        # No per-pass 8-bit rounding: within 2 LSB from 1.2 px (mostly 1 LSB
+        # above ~2.25 px, 2 at e.g. 2.55 px), up to 3 LSB on noise at
+        # sub-pixel radii.  Radii every 0.05 px from 1.5 to 4 px.
+        dense = tuple(r / 15 for r in np.arange(1.5, 4.0, 0.05))
         for name, frame in self.frames.items():
-            for s in BLUR_SEVERITIES + (0.1, 0.12, 2 / 15):
+            for s in BLUR_SEVERITIES + dense:
                 with self.subTest(frame=name, severity=s):
                     cpu = np.asarray(vipsim.apply_blur(Image.fromarray(frame), s), int)
                     gpu = self.to_frame(self.vg.pil_gaussian_blur(
                         self.to_gpu(frame), s * 15.0, quantize=False)).astype(int)
-                    bound = 1 if s * 15.0 >= 2.25 else 2 if s * 15.0 >= 1.2 else 3
-                    self.assertLessEqual(np.abs(gpu - cpu).max(), bound)
+                    self.assertLessEqual(np.abs(gpu - cpu).max(), 2 if s * 15.0 >= 1.2 else 3)
 
     def test_zero_severity_is_identity(self):
         x = self.to_gpu(self.frame)
