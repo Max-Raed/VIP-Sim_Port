@@ -100,7 +100,7 @@ half4 output   = mul(_ColourTransform, original.xyzw);
 output         = clamp(output, 0, 1);
 return output;
 ```
-No gamma correction. The shader comments explicitly note it is not applied. All math in sRGB (gamma) space.
+The shader's own gamma lines are commented out, but that does not mean the math runs on sRGB values: VIP-Sim is a Linear-colour-space project (`ProjectSettings.asset`: `m_ActiveColorSpace: 1`), so `tex2D` on the camera target returns linear values and the sRGB target re-encodes on write. All math is in linear RGB, the space the Machado matrices are defined in.
 
 **Component param flow** (in `computeTransformationMatrix`):
 1. Three 11-step lookup tables `T_Protanomaly`, `T_Deuteranomaly`, `T_Tritanomaly` indexed by severity in {0.0, 0.1, …, 1.0}.
@@ -121,10 +121,11 @@ i0 = floor(idx)
 i1 = min(i0 + 1, 10)
 w = idx - i0
 mat = matrices[i0] * (1 - w) + matrices[i1] * w
-result = arr @ mat.T                  # equivalent to mul(mat, vec) per pixel
-result = clip(result, 0, 1)
+lin = srgb_to_linear(arr)             # mirror Unity's Linear colour space
+result = lin @ mat.T                  # equivalent to mul(mat, vec) per pixel
+result = linear_to_srgb(clip(result, 0, 1))
 ```
-Monochrome path computes `gray = 0.299·R + 0.587·G + 0.114·B` directly and lerps `arr * (1 − s) + gray_rgb * s`.
+Monochrome path computes `gray = 0.299·R + 0.587·G + 0.114·B` on the linear values and lerps `lin * (1 − s) + gray_rgb * s`.
 
 **Equivalence.**
 
@@ -140,11 +141,11 @@ Monochrome path computes `gray = 0.299·R + 0.587·G + 0.114·B` directly and le
 3. **Matrix application**: `mul(M, v)` (Unity, column vector) equals `arr @ M.T` (Python, row vector); standard linear-algebra identity.
 4. **Monochrome**: Python's `arr * (1 − s) + gray · s` equals applying the row-lerped luma matrix `[(1 − 0.701s, 0.587s, 0.114s), …]` by matrix-multiply linearity. Algebraically identical.
 5. **Final clamp**: identical (`clamp/clip [0,1]`).
-6. **Gamma**: neither side applies gamma correction, same approximation on both sides.
+6. **Colour space**: both sides apply the matrix to linear RGB. Earlier revisions of the port applied it to sRGB code values, which this section wrongly called equivalent; that made saturated colours far too dark (pure red under protanomaly at severity 1.0: (38, 29, 0) instead of (109, 95, 0)).
 
 Caveat: shader uses `half` (fp16), Python uses fp32. Same noise floor as BCG.
 
-**Verdict.** Closed by source equivalence for all four anomaly types. Confirmatory Unity render at (Deuteranomaly, severity=0.6) matches Python output to the noise floor (measured: SSIM_blur 0.998, see § 4.4).
+**Verdict.** Closed by source equivalence for all four anomaly types. Confirmatory check at (Deuteranomaly, severity=0.6), feeding the port Unity's own unfiltered capture (`unity_refs/baseline.png`, which removes the input-texture compression offset): MAE 0.066, max 1 against `cvd_deutan_sev06.png` (the sRGB-space version scored MAE 1.04). Regression test: `tests/test_cvd.py`.
 
 ### 3.3 Field-loss masks (central, peripheral, hemianopia)
 
@@ -194,29 +195,29 @@ For all of these, plain SSIM drops to 0.3 to 0.7 while the result is visually id
 
 ### 4.4 Results
 
-Values are taken from `abs_diff_out/validation_summary.csv` (regenerated 2026-06-10 with the cleaned metric stack).
+Values are taken from `abs_diff_out/validation_summary.csv` (regenerated 2026-10-29 after the uint8-rounding and linear-light CVD fixes). Before those fixes the code reproduced the previous table for 18 of 19 filters; vortex differed because its filter changed on 2026-07-10, after the previous regeneration.
 
 **Reading the table.** "Best severity" is the sweep point in {0.1, …, 1.0} that gave the best score for that filter; "fixed" means the filter has no severity parameter (or uses a different parameter such as a phase timer). All numbers are mean values across the full image. See § 4.2 for the meaning of each metric.
 
 | Filter | Best severity | MAE | SSIM | **SSIM_blur** | ΔE2000 | W₁ | LPIPS | Status |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| bcg | fixed | 3.42 | 0.946 | **0.997** | 2.58 | 1.16 | 0.033 | ✅ Method A, proof in § 3.1 |
-| cvd (deutan) | 0.6 | 2.81 | 0.971 | **0.998** | 1.71 | 0.83 | 0.032 | ✅ Method A, proof in § 3.2 |
-| field_loss | 1.0 | 3.67 | 0.950 | **0.989** | 2.39 | 1.24 | 0.062 | ✅ Method A, proof in § 3.3 |
+| bcg | fixed | 3.39 | 0.945 | **0.997** | 2.58 | 1.08 | 0.033 | ✅ Method A, proof in § 3.1 |
+| cvd (deutan) | 0.6 | 2.46 | 0.973 | **1.000** | 1.46 | 0.53 | 0.027 | ✅ Method A, proof in § 3.2 |
+| field_loss | 1.0 | 3.66 | 0.950 | **0.989** | 2.38 | 1.22 | 0.062 | ✅ Method A, proof in § 3.3 |
 | blur | 0.2 | 4.28 | 0.964 | **0.985** | 1.98 | 3.73 | 0.050 | ✅ Method B |
-| bloom | fixed | 3.47 | 0.970 | **0.996** | 2.06 | 1.91 | 0.029 | ✅ Method B |
-| cataracts | 0.4 | 10.51 | 0.362 | **0.993** | 3.96 | 0.41 | 0.149 | ✅ Method B |
+| bloom | fixed | 3.12 | 0.971 | **0.996** | 1.97 | 1.20 | 0.029 | ✅ Method B |
+| cataracts | 0.4 | 10.50 | 0.362 | **0.993** | 3.95 | 0.38 | 0.149 | ✅ Method B |
 | distortion | fixed | 3.40 | 0.939 | **0.998** | 2.18 | 0.68 | 0.038 | ✅ Method B |
-| double_vision | 1.0 | 6.76 | 0.927 | **0.976** | 3.31 | 5.26 | 0.089 | ✅ Method B |
+| double_vision | 1.0 | 6.67 | 0.927 | **0.976** | 3.31 | 5.03 | 0.089 | ✅ Method B |
 | flickering_stars | fixed (30-frame burst) | 2.73 | 0.967 | **0.998** | 1.97 | 0.80 | 0.032 | ✅ Method B, via burst-frame protocol |
 | floaters | fixed | 6.39 | 0.787 | **0.990** | 3.17 | 1.90 | 0.242 | ✅ Method B |
-| foveal_darkness | 1.0 | 6.15 | 0.924 | **0.953** | 2.96 | 2.42 | 0.065 | ✅ Method B |
-| noise | 0.4 | 21.07 | 0.382 | **0.945** | 7.27 | 13.83 | 0.588 | ✅ Method B (stochastic) |
+| foveal_darkness | 1.0 | 6.14 | 0.924 | **0.953** | 2.96 | 2.41 | 0.065 | ✅ Method B |
+| noise | 0.4 | 21.13 | 0.382 | **0.945** | 7.29 | 13.98 | 0.588 | ✅ Method B (stochastic) |
 | pixelation | 0.1 | 2.59 | 0.965 | **0.999** | 1.67 | 0.74 | 0.060 | ✅ Method B |
-| teichopsia | fixed | 15.83 | 0.639 | **0.965** | 9.20 | 2.56 | 0.297 | ✅ Method B |
-| vortex | 0.5 | 4.98 | 0.906 | **0.972** | 2.78 | 0.75 | 0.055 | ✅ Method B |
+| teichopsia | fixed | 15.81 | 0.639 | **0.965** | 9.19 | 2.51 | 0.297 | ✅ Method B |
+| vortex | 0.5 | 4.92 | 0.907 | **0.972** | 2.76 | 0.76 | 0.053 | ✅ Method B |
 | glitch | 0.1 | 14.79 | 0.602 | 0.890 | 11.17 | 0.76 | 0.331 | ⚠️ Dropped (just below 0.90, non-deterministic) |
-| led | fixed | 29.57 | 0.807 | 0.722 | 11.93 | 2.39 | 0.124 | ⚠️ Marginal, cell-phase tune pending |
+| led | fixed | 29.53 | 0.807 | 0.723 | 11.92 | 2.02 | 0.124 | ⚠️ Marginal, cell-phase tune pending |
 | wiggle | fixed (30-frame burst) | — | — | **0.901** (mean), 0.884 (min) | — | — | — | ✅ Method B, via burst-frame protocol (see § 4.6) |
 | nystagmus | fixed (30-frame burst) | — | — | **1.000** (mean), 1.000 (min) | — | — | — | ✅ Method B, via burst-frame protocol (see § 4.6) |
 
@@ -321,7 +322,7 @@ The fix is the **burst-frame protocol**: capture N matched frames over a fixed t
 
 | Filter | Unity capture component | Python validator | Mean SSIM_blur | Min SSIM_blur |
 |---|---|---|---:|---:|
-| flickering_stars | `unity_helpers/FlickeringStarsBurstCapture.cs` | `scripts/validate_flickering_stars_burst.py` | 0.995 | 0.991 |
+| flickering_stars | `unity_helpers/FlickeringStarsBurstCapture.cs` | `scripts/validate_flickering_stars_burst.py` | 0.995 | 0.990 |
 | wiggle | `unity_helpers/WiggleBurstCapture.cs` | `scripts/validate_wiggle_burst.py` | 0.901 | 0.884 |
 | nystagmus | `unity_helpers/NystagmusBurstCapture.cs` | `scripts/validate_nystagmus_burst.py` | 1.000 | 1.000 |
 
