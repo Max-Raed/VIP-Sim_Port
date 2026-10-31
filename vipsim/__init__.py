@@ -7,7 +7,7 @@ on first access, so `import vipsim` neither requires torch nor pays for
 importing it.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .filters import (  # noqa: F401
     CVD_MATRICES,
