@@ -158,6 +158,7 @@ class TestFieldLossBlend(unittest.TestCase):
             "top level": np.full((h, w), top),
             "low severity": radial * np.float32(0.06) * top,
             "high severity": vf._radial_weight_mask(h, w, kind="peripheral") * top,
+            "negative": rng.random((h, w)).astype(np.float32) * -top,
         }
         for name, bias in biases.items():
             with self.subTest(bias=name):
@@ -165,6 +166,24 @@ class TestFieldLossBlend(unittest.TestCase):
                 got = vf._blend_mip_levels(arr, bias, n_levels)
                 self.assertEqual(got.dtype, want.dtype)
                 np.testing.assert_array_equal(got, want)
+
+    def test_out_of_range_levels_raise_like_stacked_lookup(self):
+        h, w = 9, 13
+        arr = np.asarray(noise_image(h, w), dtype=np.float32) / 255.0
+        n_levels = int(2 + np.floor(np.log(max(h, w))))
+        for name, value in [("nan", np.nan), ("too high", n_levels),
+                            ("too low", -n_levels - 1)]:
+            bias = np.full((h, w), value, np.float32)
+            with self.subTest(bias=name), np.errstate(invalid="ignore"):
+                with self.assertRaises(IndexError):
+                    blend_reference(arr, bias, n_levels)
+                with self.assertRaises(IndexError):
+                    vf._blend_mip_levels(arr, bias, n_levels)
+
+    def test_nan_severity_raises_as_before(self):
+        img = noise_image(9, 13)
+        with np.errstate(invalid="ignore"), self.assertRaises(IndexError):
+            vf.apply_field_loss(img, severity=float("nan"))
 
 
 def vortex_reference(img: Image.Image, severity: float = 0.5,

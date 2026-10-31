@@ -496,9 +496,15 @@ def _blend_mip_levels(arr: np.ndarray, bias: np.ndarray, n_levels: int) -> np.nd
     one floor(bias) value at a time, so the n_levels x frame stack is never
     built. Levels no pixel samples are never blurred, and where every frac of
     a group is 0 the upper level's weight is exactly 0, so the lower level
-    stands in for it.
+    stands in for it. Level indices follow the stack's indexing too: a
+    negative floor(bias) counts from the top level, and one outside
+    [-n_levels, n_levels) raises IndexError (a NaN bias casts to -2**31).
     """
     lo = np.floor(bias).astype(np.int32)
+    if lo.size and (lo.min() < -n_levels or lo.max() >= n_levels):
+        bad = lo.min() if lo.min() < -n_levels else lo.max()
+        raise IndexError(f"index {bad} is out of bounds for axis 0 "
+                         f"with size {n_levels}")
     frac = bias - lo  # float32 - int32 promotes to float64
     out = np.empty(arr.shape, dtype=np.result_type(arr, frac))
     built = {}
@@ -511,10 +517,11 @@ def _blend_mip_levels(arr: np.ndarray, bias: np.ndarray, n_levels: int) -> np.nd
     for i in np.unique(lo).tolist():
         sel = lo == i
         f = frac[sel][:, None]
-        lower = level(i)[sel]
-        upper = level(min(i + 1, n_levels - 1))[sel] if f.any() else lower
+        lower = level(i % n_levels)[sel]
+        upper = (level(min(max(i + 1, 0), n_levels - 1))[sel] if f.any()
+                 else lower)
         out[sel] = lower * (1 - f) + upper * f
-        del built[i]  # lower levels are not sampled again
+        del built[i % n_levels]  # lower levels are not sampled again
     return out
 
 
