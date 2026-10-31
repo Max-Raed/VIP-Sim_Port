@@ -8,7 +8,7 @@ mode (UV-shift via shader, no camera-transform rotation) and
 saccade cycle is fully deterministic from `timer_secs` and the static params.
 
 This script implements the time-aware saccade cycle here, standalone. It does
-NOT use the frozen-frame `apply_nystagmus()` in vipsim_filters.py, because
+NOT use the frozen-frame `apply_nystagmus()` in vipsim/filters.py, because
 that one is a static motion-blur approximation, not a time-aware port.
 
 Usage:

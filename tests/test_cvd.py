@@ -13,7 +13,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 from test_rounding import GpuParityCase  # noqa: E402
 
 UNITY_REFS = ROOT / "vipsim_assets" / "unity_refs"

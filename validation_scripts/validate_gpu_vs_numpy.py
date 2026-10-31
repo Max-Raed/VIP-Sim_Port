@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from validation_scripts.abs_diff import score_abs_diff  # noqa: E402
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 
 OUT = ROOT / "abs_diff_out"
 DEFAULT_INPUT = ROOT / "vipsim_assets" / "Trafficscene_2048x1024.png"
@@ -95,10 +95,10 @@ def main():
 
     try:
         import torch
-        import vipsim_gpu as vg
+        from vipsim import gpu as vg
     except Exception as e:
-        sys.exit(f"GPU check needs torch + vipsim_gpu: {e}\n"
-                 f"Install with: pip install torch")
+        sys.exit(f"GPU check needs torch + vipsim.gpu: {e}\n"
+                 f"Install with: pip install 'vipsim[gpu]'")
 
     if not args.input.is_file():
         sys.exit(f"Missing input: {args.input}")

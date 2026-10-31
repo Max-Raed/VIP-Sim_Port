@@ -11,7 +11,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 
 
 def ramp_image() -> Image.Image:
@@ -53,7 +53,7 @@ class GpuParityCase(unittest.TestCase):
     def setUpClass(cls):
         try:
             import torch
-            import vipsim_gpu as vg
+            from vipsim import gpu as vg
         except ImportError as e:
             raise unittest.SkipTest(f"torch not available: {e}")
         cls.vg = vg

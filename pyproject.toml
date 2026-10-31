@@ -1,6 +1,7 @@
 [build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+# 1.27 is the first hatchling with PEP 639 (license expression + license-files).
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
 
 [project]
 name = "vipsim"
@@ -47,12 +48,14 @@ Homepage = "https://github.com/Max-Raed/VIP-Sim_Port"
 Upstream = "https://github.com/Max-Raed/VIP-Sim"
 Issues = "https://github.com/Max-Raed/VIP-Sim_Port/issues"
 
-[tool.setuptools]
-# vipsim.assets is a data-only directory (the field-loss overlay).
-packages = ["vipsim", "vipsim.assets"]
+[tool.hatch.version]
+# Single source of truth: __version__ in vipsim/__init__.py (currently 0.1.0).
+path = "vipsim/__init__.py"
 
-[tool.setuptools.dynamic]
-version = { attr = "vipsim.__version__" }
+[tool.hatch.build.targets.wheel]
+# Only the package; vipsim/assets/ (the field-loss overlay) ships inside it.
+packages = ["vipsim"]
 
-[tool.setuptools.package-data]
-"vipsim.assets" = ["*.jpg"]
+[tool.hatch.build.targets.sdist]
+# No tests, validation scripts, Unity captures, renders or abs_diff_out.
+only-include = ["vipsim", "readme.md", "LICENSE"]

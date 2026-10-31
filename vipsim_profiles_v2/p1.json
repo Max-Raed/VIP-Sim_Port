@@ -56,7 +56,7 @@
   "excluded_shaders": [],
   "removed_from_v1": [],
   "capability_gaps": [
-    "In-Filling (-): no filter exists in vipsim_filters.py. Capability gap for P1."
+    "In-Filling (-): no filter exists in vipsim.filters. Capability gap for P1."
   ],
   "values_are_starting_points": true,
   "filters": [

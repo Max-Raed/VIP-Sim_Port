@@ -14,7 +14,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 
 
 def noise_image(h: int, w: int, seed: int = 0) -> Image.Image:

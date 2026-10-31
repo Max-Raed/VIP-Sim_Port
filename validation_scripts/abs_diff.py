@@ -16,7 +16,7 @@ Picking metrics per filter family (rule of thumb):
   field/double/foveal → MAE on masked region + SSIM full image
   floaters, flicker   → SSIM (occluder shape) + MAE
 
-Used to validate that vipsim_filters.py produces (near-)identical output
+Used to validate that vipsim/filters.py produces (near-)identical output
 to the Unity VIP-Sim reference. Two reference modes:
 
 1. **participants_panel** mode (interim, no Unity required):
@@ -75,7 +75,7 @@ except Exception:
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 from validation_scripts.metric_constants import SSIM_BLUR_SIGMA  # noqa: E402
 
 ASSETS = ROOT / "vipsim_assets"

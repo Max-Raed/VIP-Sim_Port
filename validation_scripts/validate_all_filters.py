@@ -33,7 +33,7 @@ from validation_scripts.abs_diff import (  # noqa: E402
     load_unity_reference,
     score_abs_diff,
 )
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 
 ASSETS = ROOT / "vipsim_assets"
 UNITY_REFS = ASSETS / "unity_refs"

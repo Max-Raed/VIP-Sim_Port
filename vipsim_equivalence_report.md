@@ -10,7 +10,7 @@ For implementation details of the Unity-side capture pipeline (scene auto-setup,
 
 ## 1. What we are validating and why
 
-The original VIP-Sim system runs in Unity as a stack of HLSL shaders. For the OCAVIP study every filter was re-implemented in Python (`vipsim/vipsim_filters.py`) so it can be applied server-side as part of the web pipeline. The Python port must be visually equivalent to the Unity original, otherwise any downstream audit or VLM evaluation is no longer testing the same impairment model.
+The original VIP-Sim system runs in Unity as a stack of HLSL shaders. For the OCAVIP study every filter was re-implemented in Python (`vipsim/filters.py`) so it can be applied server-side as part of the web pipeline. The Python port must be visually equivalent to the Unity original, otherwise any downstream audit or VLM evaluation is no longer testing the same impairment model.
 
 "Equivalent" can mean two different things depending on the filter, so we use two complementary methods.
 

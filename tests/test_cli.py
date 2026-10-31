@@ -1,4 +1,4 @@
-"""Regression tests for the vipsim_filters command line."""
+"""Regression tests for the command line, run through the `python vipsim_filters.py` alias."""
 import importlib.util
 import subprocess
 import sys
@@ -12,7 +12,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 CLI = ROOT / "vipsim_filters.py"
 sys.path.insert(0, str(ROOT))
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 
 
 def _run(*args):

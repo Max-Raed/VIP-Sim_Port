@@ -36,6 +36,29 @@ class TestPackage(unittest.TestCase):
                            text=True, cwd=ROOT)
         self.assertEqual(r.stdout.strip(), "False", r.stderr)
 
+    def test_gpu_exports_are_lazy(self):
+        code = ("import sys, vipsim; "
+                "print('torch' in sys.modules, 'VipSimGPU' in dir(vipsim))")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, cwd=ROOT)
+        self.assertEqual(r.stdout.split(), ["False", "True"], r.stderr)
+        with self.assertRaises(AttributeError):
+            vipsim.no_such_name
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "torch not installed")
+    def test_gpu_exports_come_from_gpu_module(self):
+        from vipsim import gpu
+        self.assertIs(vipsim.VipSimGPU, gpu.VipSimGPU)
+        self.assertIs(vipsim.VisualImpairmentWrapper, gpu.VisualImpairmentWrapper)
+
+    def test_missing_gpu_extra_names_it(self):
+        # A fresh interpreter with torch blocked, whether or not it is installed.
+        code = ("import sys; sys.modules['torch'] = None; import vipsim\n"
+                "try:\n    vipsim.VipSimGPU\nexcept ImportError as e:\n    print(e)")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, cwd=ROOT)
+        self.assertIn("vipsim[gpu]", r.stdout, r.stderr)
+
     def test_module_cli(self):
         r = subprocess.run([sys.executable, "-m", "vipsim", "--list-presets"],
                            capture_output=True, text=True, cwd=ROOT)

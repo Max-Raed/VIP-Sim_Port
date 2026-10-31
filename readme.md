@@ -11,7 +11,8 @@
 ![NumPy](https://img.shields.io/badge/NumPy-Pillow-013243?logo=numpy&logoColor=white)
 ![Filters](https://img.shields.io/badge/filters-20-brightgreen)
 ![Validated](https://img.shields.io/badge/Unity%20equivalence-17%2F19%20validated-success)
-![License](https://img.shields.io/badge/license-CC%20BY%204.0-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![PyPI](https://img.shields.io/pypi/v/vipsim)
 
 </div>
 
@@ -30,39 +31,51 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 - **Two backends** — a NumPy/PIL reference (`vipsim.filters`) and a batched PyTorch port (`vipsim.gpu`). The GPU port covers every filter, preset and profile, with the CPU's keyword arguments, and reproduces the CPU output bit for bit wherever it has been tested (see [Under the hood](#-under-the-hood-gpu-port)).
 - **Checked against Unity** — 17 of 19 tracked filters pass the repo's SSIM_blur criterion against matched Unity captures; read the [caveats](#-validation) before citing this.
 - **Drop-in Gym/MyoSuite wrapper** for applying impairment chains to RL observations on-device.
-- **Zero-dependency CLI** for one-off image processing.
+- **`vipsim` command** for one-off image processing, installed with the package.
 
 ## 📦 Repository contents
 
+Only the `vipsim/` package goes into the PyPI release; everything else is for development and validation.
+
 | File | Role |
 |---|---|
-| `vipsim/filters.py` | CPU reference implementation — 20 filters, 24 presets, and a CLI. The source of truth for behavior. |
+| `vipsim/filters.py` | CPU reference implementation — 20 filters, 24 presets, and the CLI. The source of truth for behavior. |
 | `vipsim/gpu.py` | PyTorch port of every filter, operating on batched, channels-first tensors `[N, 3, H, W]` and matching the CPU output. Runs presets and profiles; includes a Gym/MyoSuite observation wrapper. |
-| `vipsim_filters.py`, `vipsim_gpu.py` | Aliases so in-repo scripts and older commands keep working; not part of the installed package. |
-| `pyproject.toml` | Package metadata for `pip install` / PyPI (distribution name `vipsim`). |
+| `vipsim/__init__.py`, `vipsim/__main__.py` | Public API (`from vipsim import apply_preset`, …), `__version__`, and `python -m vipsim`. |
+| `vipsim/assets/` | The macular-degeneration overlay used by `apply_field_loss` (shipped in the package). |
+| `vipsim_filters.py`, `vipsim_gpu.py` | Aliases so older commands (`python vipsim_filters.py …`) keep working; not part of the installed package. |
+| `pyproject.toml` | Package metadata and build config (hatchling; distribution name `vipsim`). |
+| `.github/workflows/publish.yml` | Builds and publishes to PyPI via Trusted Publishing when a GitHub release is published. |
+| `tests/` | Unit tests (CPU filters, CLI, packaging, GPU-vs-CPU parity). |
 | `vipsim_equivalence_report.md` | The validation document: how the Python port is shown to reproduce the Unity shaders, with methods, metrics, and results. |
+| `validate.sh`, `validation_scripts/` | One-command Unity-equivalence validation and the scripts behind it. |
+| `vipsim_assets/`, `abs_diff_out/` | Input scene, Unity reference captures, and validation outputs. |
 | `vipsim_profiles_v2/` | The 7 validated VIP-Sim participant profiles as filter stacks (`p1-p7.json`), calibrated against the paper's Figure-6 panels, with side-by-side renders. |
 | `validation_scripts/profile_tuner.py` | Interactive browser tuner (localhost:8765): live sliders for every parameter, similarity scoring vs a reference, auto-tune, and a generated `/docs` page. |
 | `validation_scripts/render_profiles_v2.py` | Regenerates the paper-vs-ours comparison renders for the profiles. |
+| `unity_helpers/` | Unity capture scripts used to produce the reference renders. |
 | `filter_documentation.html` | Plain-language documentation of every filter and parameter (static export of the tuner's `/docs` page). |
 
 ## 🚀 Quick start
 
 ### Install
 
+Requires Python 3.12 or newer.
+
 ```bash
-pip install .                       # CPU reference (numpy, pillow)
-pip install ".[teichopsia]"         # + scikit-image, needed by apply_teichopsia
-pip install ".[gpu]"                # + torch, for vipsim.gpu
-pip install ".[gym]"                # + torch and gymnasium, for VisualImpairmentWrapper
+pip install vipsim                  # CPU reference (numpy, pillow)
+pip install "vipsim[teichopsia]"    # + scikit-image, needed by apply_teichopsia
+pip install "vipsim[gpu]"           # + torch, for vipsim.gpu / VipSimGPU
+pip install "vipsim[gym]"           # + torch and gymnasium, for VisualImpairmentWrapper
+pip install "vipsim[all]"           # everything
 ```
 
-Once published, replace `.` with `vipsim` (e.g. `pip install "vipsim[gpu]"`).
+From a checkout of this repository: `pip install -e ".[all]"`.
 
 ### Command line
 
 ```bash
-# Single filter (`python -m vipsim ...` works too)
+# Single filter (`python -m vipsim ...` and `python vipsim_filters.py ...` work too)
 vipsim input.png output.png --filter blur --severity 0.5
 vipsim input.png output.png --filter cvd --type deuteranomaly --severity 0.8
 vipsim input.png output.png --filter cataracts --severity 0.5
@@ -81,27 +94,32 @@ vipsim --list-presets
 
 ```python
 from PIL import Image
-import vipsim as vip
+from vipsim import apply_cvd, apply_preset
 
 img = Image.open("scene.png").convert("RGB")
 
 # Apply one filter
-out = vip.apply_cvd(img, cvd_type="deuteranomaly", severity=0.6)
+out = apply_cvd(img, cvd_type="deuteranomaly", severity=0.6)
 
 # Apply a clinical preset (chained filters)
-out = vip.apply_preset(img, "macular_degeneration")
+out = apply_preset(img, "macular_degeneration")
 
 out.save("scene_impaired.png")
 ```
+
+Or as a module: `import vipsim as vip`, then `vip.apply_blur(img, 0.5)`, `vip.PRESETS`, `vip.__version__`. Every filter is exported as `apply_<name>`.
 
 ### GPU / batched
 
 The PyTorch port works on a whole batch of frames at once and keeps everything on-device. Every filter is a `VipSimGPU` method with the CPU name and keyword arguments (`sim.cvd(x, cvd_type=..., severity=...)` is `apply_cvd(img, cvd_type=..., severity=...)` on a batch). Image-independent data (warp fields, index maps, masks, lookup tables) is computed once per parameter set and frame size by the CPU's own NumPy code and kept in a bounded on-device cache.
 
+Needs `pip install "vipsim[gpu]"`. `VipSimGPU` and `VisualImpairmentWrapper` can also be imported straight from `vipsim`; torch is only loaded when you first touch them, so a plain `import vipsim` stays fast and works without torch.
+
 ```python
 import json
 import torch
-from vipsim.gpu import VipSimGPU, frames_to_gpu, gpu_to_frames
+from vipsim import VipSimGPU
+from vipsim.gpu import frames_to_gpu, gpu_to_frames
 
 sim = VipSimGPU(device="cuda")
 x = frames_to_gpu(frames, sim.device)           # frames: [N, H, W, 3] uint8 -> [N, 3, H, W] in [0,1]
@@ -116,7 +134,7 @@ out = gpu_to_frames(x)                          # back to uint8, same pixels as 
 ### Inside an RL / MyoSuite environment
 
 ```python
-from vipsim.gpu import VisualImpairmentWrapper
+from vipsim import VisualImpairmentWrapper    # needs vipsim[gym]
 
 env = VisualImpairmentWrapper(
     env,
@@ -222,7 +240,7 @@ Because the GPU port equals the NumPy port, it inherits the NumPy port's validat
 
 ## ✅ Validation
 
-The Python port isn't just visually plausible — it's checked against the Unity original. Two complementary methods are used, documented in full in [`vipsim_equivalence_report.md`](vipsim_equivalence_report.md):
+The Python port isn't just visually plausible — it's checked against the Unity original. Two complementary methods are used, documented in full in [`vipsim_equivalence_report.md`](https://github.com/Max-Raed/VIP-Sim_Port/blob/main/vipsim_equivalence_report.md):
 
 - **Method A — algorithmic proof.** For pure deterministic arithmetic filters (`bcg`, `cvd`), the HLSL fragment math and the NumPy code are lined up and shown to compute the same function. Fed Unity's own unfiltered capture, both match the Unity render to within 1 level (MAE 0.14 for bcg, 0.07 for cvd).
 - **Method B — measured fidelity.** For everything else (noise, kernels, halo scatter, UV warps, gaze-contingent and time-varying effects), matched 2048×1024 captures are compared through a stack of published metrics: **MAE, SSIM, SSIM_blur, ΔE2000, Wasserstein-1, LPIPS**.
@@ -242,6 +260,8 @@ For the three inherently time-varying filters (`flickering_stars`, `wiggle`, `ny
 - `field_loss` has no source-level proof and is now listed under Method B.
 
 ### Reproduce the sweep
+
+This needs a clone of the repository (the Unity captures and scripts are not in the PyPI package). `./validate.sh` does all of it, including the virtualenv; by hand:
 
 ```bash
 source .venv/bin/activate
@@ -264,13 +284,19 @@ The GPU tests run on CUDA when it is available, else on CPU torch, and are skipp
 
 ### Releasing to PyPI
 
-The distribution name is `vipsim`; the version lives in `vipsim/__init__.py`.
+The distribution name is `vipsim`; the version lives in `vipsim/__init__.py` (`__version__`), which the build reads.
+
+Releases are published by [`.github/workflows/publish.yml`](https://github.com/Max-Raed/VIP-Sim_Port/blob/main/.github/workflows/publish.yml) through PyPI Trusted Publishing, so no API token is involved:
+
+1. Bump `__version__` in `vipsim/__init__.py` and commit.
+2. Create a GitHub release with a matching tag (e.g. `v0.1.0`). Publishing the release builds the sdist and wheel, checks them with `twine check`, and uploads them to PyPI.
+
+To check a build locally before releasing:
 
 ```bash
 python -m pip install build twine
 python -m build                      # writes dist/vipsim-<version>.tar.gz and .whl
 python -m twine check dist/*
-python -m twine upload dist/*        # use --repository testpypi for a dry run
 ```
 
 ## 📚 References
@@ -282,7 +308,9 @@ python -m twine upload dist/*        # use --repository testpypi for a dry run
 
 ## 📄 License & attribution
 
-Based on shader code from **[VIP-Sim](https://github.com/Max-Raed/VIP-Sim)** by Max Raed, licensed **CC BY 4.0**. This reimplementation is distributed under the same terms — please preserve attribution.
+VipSim is released under the **MIT License** (see [`LICENSE`](https://github.com/Max-Raed/VIP-Sim_Port/blob/main/LICENSE)).
+
+It reimplements shader code from **[VIP-Sim](https://github.com/Max-Raed/VIP-Sim)** by Max Raed, which is licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please keep that attribution when you use or redistribute VipSim.
 
 ---
 

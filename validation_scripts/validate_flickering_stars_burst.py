@@ -7,7 +7,7 @@ of `FlickeringStars.cs`. Outputs per-frame side-by-side PNGs + a SSIM_blur
 score table.
 
 This script is intentionally STANDALONE — it does not import or modify
-`vipsim_filters.py` or any other validation infrastructure. The time-aware
+`vipsim/filters.py` or any other validation infrastructure. The time-aware
 flicker function lives in this file. If it pans out, promote it later.
 
 Usage:

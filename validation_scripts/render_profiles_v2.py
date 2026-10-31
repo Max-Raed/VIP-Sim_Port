@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import vipsim_filters as vf  # noqa: E402
+from vipsim import filters as vf  # noqa: E402
 
 PROFILE_DIR = ROOT / "vipsim_profiles_v2"
 RENDER_DIR = PROFILE_DIR / "renders"
