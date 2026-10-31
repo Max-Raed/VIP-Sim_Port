@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Interactive tuner for the vipsim_profiles_v2 drafts.
 
-Run:    .venv/bin/python scripts/profile_tuner.py   (then open http://localhost:8765)
+Run:    python validation_scripts/profile_tuner.py   (then open http://localhost:8765)
 
 Left: paper ref (renders/ref-Images/pN.png). Right: our render, re-applied live
 as you drag sliders. Every numeric parameter of every filter step in the
 profile JSON gets a slider; Save writes the values back into the JSON
 (all documentation fields are preserved). Then regenerate the comparison
-PNGs with scripts/render_profiles_v2.py.
+PNGs with validation_scripts/render_profiles_v2.py.
 """
 import base64
 import io
 import json
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,13 @@ PROFILE_DIR = ROOT / "vipsim_profiles_v2"
 REF_DIR = PROFILE_DIR / "renders" / "ref-Images"
 SCENE_FULL = Image.open(ROOT / "vipsim_assets" / "Trafficscene.png").convert("RGB")
 PORT = 8765
+# Profile ids name files under PROFILE_DIR / REF_DIR, so they must never
+# carry path separators, "..", or a drive.
+_PID_RE = re.compile(r"p\d[a-z0-9_-]*")
+
+
+def valid_pid(pid) -> bool:
+    return isinstance(pid, str) and _PID_RE.fullmatch(pid) is not None
 
 _render_lock = threading.Lock()
 _scene_cache = {}
@@ -53,6 +61,8 @@ def ref_image(pid):
     """Reference image for pid: custom upload > own ref > base profile ref."""
     if pid in _custom["ref"]:
         return _custom["ref"][pid]
+    if not valid_pid(pid):
+        return None
     f = REF_DIR / f"{pid}.png"
     if not f.is_file() and len(pid) >= 2:
         f = REF_DIR / f"{pid[:2]}.png"
@@ -1460,9 +1470,22 @@ class Handler(BaseHTTPRequestHandler):
         from urllib.parse import parse_qs, urlparse
         return parse_qs(urlparse(self.path).query).get(key, [None])[0]
 
+    def _same_origin(self):
+        """Only serve the tuner's own page: any open web page can send
+        requests to localhost, and a rebound DNS name arrives with a
+        foreign Host header."""
+        port = self.server.server_address[1]
+        hosts = {f"localhost:{port}", f"127.0.0.1:{port}"}
+        if self.headers.get("Host") not in hosts:
+            return False
+        origin = self.headers.get("Origin")
+        return origin is None or origin in {f"http://{h}" for h in hosts}
+
     def do_GET(self):
         # Nonbreaking: any error becomes a JSON response, never a dead thread.
         try:
+            if not self._same_origin():
+                return self._send(403, json.dumps({"error": "forbidden origin"}))
             self._get()
         except Exception as e:  # noqa: BLE001
             try:
@@ -1475,12 +1498,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, PAGE, "text/html; charset=utf-8")
         elif path == "/list":
-            ids = sorted(p.stem for p in PROFILE_DIR.glob("p*.json") if p.stem[1].isdigit())
+            ids = sorted(p.stem for p in PROFILE_DIR.glob("p*.json") if valid_pid(p.stem))
             self._send(200, json.dumps(ids))
         elif path == "/profile":
             pid = self._q("id")
             f = PROFILE_DIR / f"{pid}.json"
-            if not f.is_file():
+            if not valid_pid(pid) or not f.is_file():
                 return self._send(404, "{}")
             self._send(200, f.read_text())
         elif path == "/ref":
@@ -1511,6 +1534,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         # Nonbreaking: any error becomes a JSON response, never a dead thread.
         try:
+            if not self._same_origin():
+                return self._send(403, json.dumps({"error": "forbidden origin"}))
             self._post()
         except Exception as e:  # noqa: BLE001
             try:
@@ -1616,6 +1641,8 @@ class Handler(BaseHTTPRequestHandler):
             _scene_cache.clear()
             self._send(200, json.dumps({"size": img.size}))
         elif self.path == "/save":
+            if not valid_pid(pid):
+                return self._send(400, json.dumps({"error": "invalid profile id"}))
             f = PROFILE_DIR / f"{pid}.json"
             # The file may have been moved/deleted while the tab was open
             # (e.g. sorted into alternative-profiles/): recreate it instead
@@ -1631,13 +1658,14 @@ class Handler(BaseHTTPRequestHandler):
             f.write_text(json.dumps(prof, indent=2) + "\n")
             self._send(200, "{}")
         elif self.path == "/saveas":
-            import re
             import shutil
             base_id = payload.get("baseId", "")
             new_id = payload.get("newId", "")
-            if not re.fullmatch(r"p\d[a-z0-9_-]*", new_id):
+            if not valid_pid(new_id):
                 return self._send(400, json.dumps(
                     {"error": "name must start with p<digit>, e.g. p3c"}))
+            if base_id and not valid_pid(base_id):
+                return self._send(400, json.dumps({"error": "invalid base profile id"}))
             dst = PROFILE_DIR / f"{new_id}.json"
             if dst.exists() and not payload.get("overwrite"):
                 return self._send(409, json.dumps({"error": new_id + " already exists"}))
