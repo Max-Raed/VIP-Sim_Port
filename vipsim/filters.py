@@ -107,6 +107,18 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
 # Gaussian Blur / Hyperopia (from myBlur.shader)
 # =============================================================================
 
+def _check_blur_radius(radius) -> None:
+    """Raise ValueError where Pillow 13's GaussianBlur does: a NaN or
+    infinite radius ("radius must be >= 0"), or one of 2**31 - 64 px or more
+    either way ("radius too large").  Pillow 12 segfaults on those radii,
+    taking the whole interpreter down."""
+    r = float(radius)
+    if not np.isfinite(r):
+        raise ValueError("radius must be >= 0")
+    if abs(r) >= 2147483584.0:
+        raise ValueError("radius too large")
+
+
 def apply_blur(img: Image.Image, severity: float = 0.5) -> Image.Image:
     """Apply Gaussian blur to simulate reduced visual acuity (hyperopia).
 
@@ -118,6 +130,7 @@ def apply_blur(img: Image.Image, severity: float = 0.5) -> Image.Image:
     if severity == 0.0:
         return img.copy()
     radius = severity * 15.0
+    _check_blur_radius(radius)            # NaN severity survives np.clip
     return img.filter(ImageFilter.GaussianBlur(radius=radius))
 
 
@@ -194,7 +207,8 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
         color = pow(color, gamma)
 
     Args:
-        img: Input PIL Image (RGB).
+        img: Input PIL Image; converted to RGB like every other filter input
+            (alpha is dropped, not tone-mapped).
         brightness: Multiplier (1.0 = no change, <1 darker, >1 brighter).
         contrast: Multiplier (1.0 = no change, <1 less contrast, >1 more contrast).
         gamma: Exponent (1.0 = no change, >1 darker midtones, <1 lighter midtones).
@@ -210,10 +224,11 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
             because the original VIP-Sim project's colour-space setting is
             unconfirmed.
     """
+    rgb = img.convert("RGB")
     if color_space == "srgb":
-        arr = np.asarray(img, dtype=np.float32) / 255.0
+        arr = np.asarray(rgb, dtype=np.float32) / 255.0
     else:
-        arr = _image_to_linear(img)
+        arr = _image_to_linear(rgb)
 
     # Brightness
     arr = arr * brightness
@@ -395,6 +410,7 @@ def _separable_gaussian(arr: np.ndarray, radius_px: float) -> np.ndarray:
     """
     if radius_px <= 0:
         return arr
+    _check_blur_radius(radius_px)
     pil = Image.fromarray(_to_uint8(arr))
     blurred = pil.filter(ImageFilter.GaussianBlur(radius=float(radius_px)))
     return np.asarray(blurred, dtype=np.float32) / 255.0
@@ -1824,6 +1840,21 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
         r, c, left = r[more], c[more], left[more]
 
 
+# apply_floaters' rejection samplers loop until enough points land in the
+# frame; parameters that leave no part of it to sample (a NaN or -inf
+# circle_radius_uv, a Gaussian centred far off-frame, NaN angle or spread)
+# would loop forever.  This many draws in a row with none accepted is
+# beyond any acceptance rate above ~1e-6, so it raises instead.
+_FLOATER_MAX_REJECTED = 10_000_000
+
+
+def _check_floater_rejections(rejected: int) -> None:
+    if rejected >= _FLOATER_MAX_REJECTED:
+        raise ValueError(
+            f"apply_floaters: no point landed in the frame in {rejected:,} "
+            "draws; check center, spread, angle and circle_radius_uv")
+
+
 def apply_floaters(img: Image.Image, severity: float = 0.5,
                      n_floaters: int = None, mode: str = "dark",
                      floater_size: int = 1, circle_radius_uv: float = 0.146,
@@ -1906,6 +1937,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
                 for y, x in region]
         ImageDraw.Draw(m).polygon(poly, fill=255)
         if region_feather:
+            _check_blur_radius(region_feather * overlay_size)
             m = m.filter(ImageFilter.GaussianBlur(region_feather * overlay_size))
         region_mask = np.asarray(m, np.float32) / 255.0
         if region_mask.max() <= 0:
@@ -1954,6 +1986,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
         pts_x, pts_y = [], []
+        rejected = 0
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2
             dx = rng.normal(0.0, sigma_x, n)
@@ -1963,6 +1996,8 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             ok = (bx >= 0) & (bx < overlay_size) & (by >= 0) & (by < overlay_size)
             pts_x.extend(bx[ok].tolist())
             pts_y.extend(by[ok].tolist())
+            rejected = 0 if ok.any() else rejected + n
+            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
     else:
@@ -1970,6 +2005,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         cx_o = cy_o = overlay_size * 0.5
         r_o = circle_radius_uv * overlay_size
         pts_x, pts_y = [], []
+        rejected = 0
         while len(pts_x) < target:
             batch = max(target * 2, 4096)
             cxs = rng.uniform(0.0, overlay_size, size=batch)
@@ -1980,6 +2016,8 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             keep = rng.random(batch) < accept_p
             pts_x.extend(cxs[keep].tolist())
             pts_y.extend(cys[keep].tolist())
+            rejected = 0 if keep.any() else rejected + batch
+            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
 
