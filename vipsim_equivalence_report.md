@@ -18,21 +18,21 @@ The original VIP-Sim system runs in Unity as a stack of HLSL shaders. For the OC
 
 ### Method A: algorithmic equivalence (source-level proof)
 
-For filters that are pure deterministic arithmetic (no kernels, no RNG, no resampling, no gaze contingency), the Unity HLSL fragment math and the NumPy code can be lined up side by side and shown to compute the same function. No image-similarity measurement is needed: the proof itself is the evidence. A confirmatory Unity render only serves as a sanity check that the residual sits at the fp16/fp32 rounding floor (per-pixel error around 0.5/255, mean MAE close to 3).
+For filters that are pure deterministic arithmetic (no kernels, no RNG, no resampling, no gaze contingency), the Unity HLSL fragment math and the NumPy code can be lined up side by side and shown to compute the same function. No image-similarity measurement is needed: the proof itself is the evidence. A confirmatory Unity render only serves as a sanity check that the residual sits at the fp16/fp32 rounding floor (at most one 8-bit level per pixel). That check must feed the port Unity's own unfiltered capture (`unity_refs/baseline.png`): the Unity scene renders from a block-compressed (DXT/BC1) copy of the input, which by itself differs from `Trafficscene_2048x1024.png` by MAE 2.6. Fed `baseline.png`, bcg matches at MAE 0.14 and cvd at MAE 0.07 (max 1 level each).
 
-This method applies cleanly to: bcg, cvd, field_loss.
+This method applies cleanly to: bcg, cvd.
 
 ### Method B: measured pixel fidelity (image similarity)
 
 For everything else (stochastic noise, blur kernels, halo scattering, UV warps, gaze-contingent regions, time-varying effects), a source-level proof is not possible because GPU rasterisation and CPU NumPy diverge on RNG order, floating-point reduction order, sub-pixel sampling and texture-filter conventions. So we render the same input through both implementations, take matched 2048×1024 captures, and compare them with a stack of image-similarity metrics drawn from published libraries (no in-house implementations).
 
-This method applies to the remaining 16 filters (and is also used as a sanity check for the three filters that already have a Method A proof). For the three time-varying filters in that set (flickering_stars, wiggle, nystagmus) we use a burst-frame variant of the protocol described in § 4.6.
+This method applies to the remaining 17 filters (and is also used as a sanity check for the two filters that have a Method A proof). For the three time-varying filters in that set (flickering_stars, wiggle, nystagmus) we use a burst-frame variant of the protocol described in § 4.6.
 
 ### Mapping: which filter, which method
 
 | Method A (proof) | Method B (measured) only |
 |---|---|
-| bcg, cvd, field_loss | blur, bloom, cataracts, distortion, double_vision, flickering_stars, floaters, foveal_darkness, glitch, led, noise, nystagmus, pixelation, teichopsia, vortex, wiggle |
+| bcg, cvd | blur, bloom, cataracts, distortion, double_vision, field_loss, flickering_stars, floaters, foveal_darkness, glitch, led, noise, nystagmus, pixelation, teichopsia, vortex, wiggle |
 
 ---
 
@@ -149,7 +149,12 @@ Caveat: shader uses `half` (fp16), Python uses fp32. Same noise floor as BCG.
 
 ### 3.3 Field-loss masks (central, peripheral, hemianopia)
 
-The Unity implementation multiplies the rendered image by a precomputed alpha mask. The Python port multiplies by the same mask sampled at the same resolution. A formal side-by-side proof block is pending. The confirmatory Unity render at severity=1.0 sits at SSIM_blur 0.989, consistent with rounding-floor residual, so the filter is listed under Method A in the table above and treated as validated.
+**Not proven; moved to Method B.** An earlier revision said both sides multiply by the same alpha mask. Neither does:
+
+- Upstream (`myFieldLoss.shader`) picks a hardware mip level per pixel: `tex2Dlod(_MainTex, uv, w * _MaxLODlevel - 1)` on a 2×2 box-filtered mip chain stored as linear 8-bit, with `w = 1 - grey(overlay)` computed on the linearised overlay.
+- The port (`apply_field_loss`) blends a Gaussian pyramid built on sRGB values, uses the overlay luminance without linearising it, uses level `w * (n - 1)`, and adds a `severity` multiplier that upstream does not have.
+
+The SSIM_blur of 0.989 is carried by the ~86% of the frame Unity leaves sharp; inside the blurred region the port's MAE is about 9.8, against 16.5 for no filter at all.
 
 ---
 
@@ -160,9 +165,9 @@ The Unity implementation multiplies the rendered image by a precomputed alpha ma
 We render the same input image (`vipsim_assets/Trafficscene_2048x1024.png`, 2048×1024 POT) through:
 
 1. the original Unity VIP-Sim shaders, captured via the `PixelFidelityV2` scene (`unity_helpers/PixelFidelityCapture.cs`), and
-2. the Python port in `vipsim/vipsim_filters.py`,
+2. the Python port in `vipsim_filters.py`,
 
-then compare each matched pair with the metric stack below. For severity-parameterised filters we sweep severity in {0.1, 0.2, …, 1.0} and report the best-scoring point. The pipeline lives in `scripts/abs_diff.py` (per-pair metric computation) and `scripts/validate_all_filters.py` (sweep driver, writes `validation_summary.{json,csv}` and stacked comparison PNGs).
+then compare each matched pair with the metric stack below. For severity-parameterised filters we sweep severity in {0.1, 0.2, …, 1.0} and report the best-scoring point. The pipeline lives in `validation_scripts/abs_diff.py` (per-pair metric computation) and `validation_scripts/validate_all_filters.py` (sweep driver, writes `validation_summary.{json,csv}` and stacked comparison PNGs).
 
 ### 4.2 Metric stack
 
@@ -170,9 +175,9 @@ All metrics use published libraries with no in-house implementations. Earlier re
 
 | Metric | What it captures | Library | How to read a value | Reference |
 |---|---|---|---|---|
-| **MAE** | Mean per-pixel absolute error on 0 to 255 scale | `numpy` | Lower is better. 0 = identical. A value around 3 is the fp16/fp32 rounding floor between GPU and CPU. Above 20 means structurally different. | (definitional) |
-| **SSIM** | Structural similarity (luminance, contrast, structure) | `skimage.metrics.structural_similarity` | Range 0 to 1, higher is better. 1.0 = identical. Values above 0.95 are visually indistinguishable for non-stochastic content. Stochastic patterns can score low here even when visually identical. | Wang, Bovik, Sheikh & Simoncelli, *Image quality assessment: from error visibility to structural similarity*, IEEE TIP 13(4), 2004 |
-| **SSIM_blur** | SSIM after a small (σ = 1.0 px) Gaussian pre-blur on both images. Tolerates sub-pixel jitter from non-deterministic GPU sampling that is invisible to a human viewer but punishes plain SSIM. | `skimage` + `scipy.ndimage.gaussian_filter` | Range 0 to 1, higher is better. **Our pass threshold is 0.90.** Above 0.95 is visually identical. | Wang et al. 2004 (metric). The pre-blur is a standard pre-processing step, not a new metric. |
+| **MAE** | Mean per-pixel absolute error on 0 to 255 scale | `numpy` | Lower is better. 0 = identical. A value around 3 is the input mismatch (Unity renders a block-compressed copy of the input; see § 2), not fp16 rounding. Above 20 means structurally different. | (definitional) |
+| **SSIM** | Structural similarity (luminance, contrast, structure), computed per R, G, B channel and averaged | `skimage.metrics.structural_similarity` | Range 0 to 1, higher is better. 1.0 = identical. Values above 0.95 are visually indistinguishable for non-stochastic content. Stochastic patterns can score low here even when visually identical. | Wang, Bovik, Sheikh & Simoncelli, *Image quality assessment: from error visibility to structural similarity*, IEEE TIP 13(4), 2004 |
+| **SSIM_blur** | SSIM after a σ = 4 px Gaussian pre-blur on both images (`validation_scripts/metric_constants.py`). Discounts detail finer than about 10 px, which tolerates noise-pattern and sub-pixel misalignment but also hides fine-scale differences. | `skimage` + `scipy.ndimage.gaussian_filter` | Range 0 to 1, higher is better. **Our pass threshold is 0.90.** Above 0.95 is visually identical. | Wang et al. 2004 (metric). The pre-blur is a standard pre-processing step, not a new metric. |
 | **ΔE2000** | Perceptual colour distance in CIE Lab, per pixel, then mean | `skimage.color.deltaE_ciede2000` | Lower is better. Below 1.0 is imperceptible to a human, below 2.5 is hard to spot, above 5 is clearly different colour. | Sharma, Wu & Dalal, *The CIEDE2000 color-difference formula*, Color Research & Application 30(1), 2005 |
 | **Wasserstein-1 (W₁)** | 1-D earth-mover distance between per-channel intensity histograms (R, G, B), averaged | `scipy.stats.wasserstein_distance` | Lower is better, units are intensity steps on a 0 to 255 byte scale. Below 3 means the two images have nearly the same colour distribution; above 10 means tonal balance has shifted noticeably (e.g. one image is overall darker or more saturated). | Kantorovich, *On the translocation of masses*, 1942. Villani, *Optimal Transport: Old and New*, 2008. |
 | **LPIPS** | Learned perceptual image patch similarity (deep features, AlexNet backbone) | official `lpips` PyPI package | Range roughly 0 to 1, lower is better. Below 0.05 is visually identical for natural images, below 0.15 is visually similar, above 0.30 is clearly different. | Zhang, Isola, Efros, Shechtman & Wang, *The Unreasonable Effectiveness of Deep Features as a Perceptual Metric*, CVPR 2018 |
@@ -193,6 +198,15 @@ We use SSIM_blur (and not plain SSIM) as the operational criterion because sever
 
 For all of these, plain SSIM drops to 0.3 to 0.7 while the result is visually identical. SSIM_blur recovers above 0.95 and matches human judgement. SSIM was originally designed for compression-artefact detection, not for stochastic-pattern equivalence, so the pre-blur is a standard adaptation.
 
+**Limits of this criterion (audit, 2026-10-29).**
+
+- Scored with the same code, the *unfiltered* image (`unity_refs/baseline.png`) already reaches SSIM_blur ≥ 0.90 against 12 of the 17 passing references (blur, bloom, cvd, distortion, field_loss, flickering_stars, floaters, foveal_darkness, noise, pixelation, teichopsia, vortex). For those filters a pass does not separate the port from doing nothing. Of the passing filters only bcg, cataracts and double_vision are clearly separated; cvd rests on its Method A proof.
+- The best sweep point is selected on the same reference it is scored against; nothing is held out, and for several filters every sweep point passes.
+- For wiggle and flickering_stars the unfiltered baseline outscores the port on most burst frames (30/30 and 26/30); wiggle passes on the 30-frame mean while 17 frames are below 0.90.
+- The flickering_stars and nystagmus burst validators score their own time-aware models, not `apply_flickering_stars` / `apply_nystagmus` in `vipsim_filters.py`.
+
+A null-relative criterion (score of the port minus score of the unfiltered image, with a margin) and references captured at clearly visible effect strengths are needed before these passes can be read as equivalence.
+
 ### 4.4 Results
 
 Values are taken from `abs_diff_out/validation_summary.csv` (regenerated 2026-10-29 after the uint8-rounding and linear-light CVD fixes). Before those fixes the code reproduced the previous table for 18 of 19 filters; vortex differed because its filter changed on 2026-07-10, after the previous regeneration.
@@ -203,7 +217,7 @@ Values are taken from `abs_diff_out/validation_summary.csv` (regenerated 2026-10
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | bcg | fixed | 3.39 | 0.945 | **0.997** | 2.58 | 1.08 | 0.033 | ✅ Method A, proof in § 3.1 |
 | cvd (deutan) | 0.6 | 2.46 | 0.973 | **1.000** | 1.46 | 0.53 | 0.027 | ✅ Method A, proof in § 3.2 |
-| field_loss | 1.0 | 3.66 | 0.950 | **0.989** | 2.38 | 1.22 | 0.062 | ✅ Method A, proof in § 3.3 |
+| field_loss | 1.0 | 3.66 | 0.950 | **0.989** | 2.38 | 1.22 | 0.062 | ✅ Method B (no source proof, see § 3.3) |
 | blur | 0.2 | 4.28 | 0.964 | **0.985** | 1.98 | 3.73 | 0.050 | ✅ Method B |
 | bloom | fixed | 3.12 | 0.971 | **0.996** | 1.97 | 1.20 | 0.029 | ✅ Method B |
 | cataracts | 0.4 | 10.50 | 0.362 | **0.993** | 3.95 | 0.38 | 0.149 | ✅ Method B |
@@ -227,7 +241,7 @@ Each image below is a stacked PNG. **Top row = Unity reference, bottom row = Pyt
 
 For flickering_stars the image is one representative frame from the burst capture (frame 029 of 30), because the filter is time-varying and a randomly chosen single frame can land in a moment where most stars are mid-fade and invisible (see § 4.6).
 
-#### Method A filters (algorithmic proof, image is sanity check)
+#### Method A filters (bcg, cvd: algorithmic proof, image is sanity check) and field_loss (Method B, see § 3.3)
 
 ##### bcg
 ![bcg](/abs_diff_out/unityVSpython/stacked/bcg_stacked.png)
@@ -322,9 +336,9 @@ The fix is the **burst-frame protocol**: capture N matched frames over a fixed t
 
 | Filter | Unity capture component | Python validator | Mean SSIM_blur | Min SSIM_blur |
 |---|---|---|---:|---:|
-| flickering_stars | `unity_helpers/FlickeringStarsBurstCapture.cs` | `scripts/validate_flickering_stars_burst.py` | 0.995 | 0.990 |
-| wiggle | `unity_helpers/WiggleBurstCapture.cs` | `scripts/validate_wiggle_burst.py` | 0.901 | 0.884 |
-| nystagmus | `unity_helpers/NystagmusBurstCapture.cs` | `scripts/validate_nystagmus_burst.py` | 1.000 | 1.000 |
+| flickering_stars | `unity_helpers/FlickeringStarsBurstCapture.cs` | `validation_scripts/validate_flickering_stars_burst.py` | 0.995 | 0.990 |
+| wiggle | `unity_helpers/WiggleBurstCapture.cs` | `validation_scripts/validate_wiggle_burst.py` | 0.901 | 0.884 |
+| nystagmus | `unity_helpers/NystagmusBurstCapture.cs` | `validation_scripts/validate_nystagmus_burst.py` | 1.000 | 1.000 |
 
 A few protocol notes carried over from setting these up:
 
@@ -332,7 +346,7 @@ A few protocol notes carried over from setting these up:
 - **Nystagmus sampling interval.** The saccade cycle is `foveat_d + rise_d = 0.25 s` with default parameters. The burst interval must be much smaller than that (we use 0.05 s × 30 frames ≈ 6 cycles), otherwise every sample lands at the same cycle phase and the validation is trivial.
 - **Wiggle timer field.** `myWiggle` exposes both a `Timer` field and an `AutomaticTimer` toggle. The burst component sets `AutomaticTimer = true` and reads `Timer` each frame, then re-renders the same `Timer` value in Python via `apply_wiggle(..., timer=...)`.
 
-For nystagmus we additionally implement the time-aware saccade cycle directly in `scripts/validate_nystagmus_burst.py` (`shift_deg_at` and `apply_uv_shift`), because the frozen-frame `apply_nystagmus` in `vipsim_filters.py` is a static motion-blur approximation rather than a time-aware port. The standalone implementation mirrors the Unity shader UV-shift convention (sample at `uv + _Displace`) and matches the Unity reference at SSIM_blur = 1.000 on every frame, including saccade peaks at shift_deg up to 7.83°.
+For nystagmus we additionally implement the time-aware saccade cycle directly in `validation_scripts/validate_nystagmus_burst.py` (`shift_deg_at` and `apply_uv_shift`), because the frozen-frame `apply_nystagmus` in `vipsim_filters.py` is a static motion-blur approximation rather than a time-aware port. The standalone implementation mirrors the Unity shader UV-shift convention (sample at `uv + _Displace`) and matches the Unity reference at SSIM_blur = 1.000 on every frame, including saccade peaks at shift_deg up to 7.83°.
 
 One trap worth noting for anyone re-running this validation: a previous capture run produced mean SSIM_blur 0.797 with the saccade frames sitting around 0.49 to 0.66, which initially looked like a magnitude mismatch in the UV-shift math. The runtime diagnostic dump (logging the live values of `foveat_d`, `rise_d`, `rise_exp`, `amp_deg`, `screenWidth_px`, `viewingAngle_deg`, and the capture-camera geometry) showed every parameter exactly matching the metadata, which ruled out the math. The actual cause was residual camera-transform rotation left over from a previous Play session: `myNystagmus.OnDisable` only subtracts the last `old_shift_deg` from the camera, so a hard stop mid-saccade can leave the camera rotated by a few degrees at the start of the next Play. A clean Play restart with no leftover rotation produces the 1.000 result reported above.
 
@@ -350,19 +364,19 @@ One trap worth noting for anyone re-running this validation: a previous capture 
 
 ```bash
 source .venv/bin/activate
-python scripts/validate_all_filters.py --no-strips
+python validation_scripts/validate_all_filters.py --no-strips
 # outputs:
 #   abs_diff_out/validation_summary.json
 #   abs_diff_out/validation_summary.csv
 #   abs_diff_out/unityVSpython/stacked/<filter>_stacked.png  (per filter)
 
 # burst-frame validators for the three time-varying filters
-python scripts/validate_flickering_stars_burst.py
-python scripts/validate_wiggle_burst.py
-python scripts/validate_nystagmus_burst.py
+python validation_scripts/validate_flickering_stars_burst.py
+python validation_scripts/validate_wiggle_burst.py
+python validation_scripts/validate_nystagmus_burst.py
 
 # regenerate grid.png + loop.gif for each burst (used in § 4.5)
-python scripts/build_burst_visuals.py
+python validation_scripts/build_burst_visuals.py
 ```
 
 The Unity references in `vipsim_assets/unity_refs/` are checked in. They were captured once via the `PixelFidelityV2` Unity scene (see [`tier2_unity_capture_pipeline.md`](tier2_unity_capture_pipeline.md)) and do not need to be regenerated for the Python sweep.

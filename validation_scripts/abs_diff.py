@@ -76,6 +76,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import vipsim_filters as vf  # noqa: E402
+from validation_scripts.metric_constants import SSIM_BLUR_SIGMA  # noqa: E402
 
 ASSETS = ROOT / "vipsim_assets"
 PROFILES_DIR = ROOT / "vipsim_profiles"
@@ -201,7 +202,7 @@ def score_abs_diff(ours: Image.Image, ref: Image.Image) -> dict:
     Metrics (all kept; pick the one(s) right for your filter family):
       - MAE (overall + per-channel): pixel-level difference, units 0–255.
         Sensitive to *any* pixel misalignment, including stochastic noise.
-      - SSIM (luminance): structural similarity on grayscale, range [0, 1].
+      - SSIM: structural similarity, mean over the R, G, B channels, range [-1, 1].
         >0.98 ≈ visually identical. Still alignment-sensitive at high freqs.
       - ΔE2000 (CIEDE2000): perceptual colour distance in Lab. <1 imperceptible,
         1–3 perceptible on close inspection, >5 clearly different. Best for
@@ -260,13 +261,13 @@ def score_abs_diff(ours: Image.Image, ref: Image.Image) -> dict:
     if _HAVE_SKIMAGE:
         a01 = a / 255.0
         b01 = b / 255.0
-        # SSIM on luminance (channel_axis=-1 averages across RGB; use that).
+        # SSIM per RGB channel, averaged (channel_axis=-1).
         result["ssim"] = float(ssim(a01, b01, channel_axis=-1, data_range=1.0))
 
         # Blurred SSIM: σ=4 Gaussian on each, then SSIM. Removes high-freq
         # noise mismatch so the structural-similarity signal isn't drowned out.
-        a_blur = gaussian_filter(a01, sigma=(4, 4, 0))
-        b_blur = gaussian_filter(b01, sigma=(4, 4, 0))
+        a_blur = gaussian_filter(a01, sigma=(SSIM_BLUR_SIGMA, SSIM_BLUR_SIGMA, 0))
+        b_blur = gaussian_filter(b01, sigma=(SSIM_BLUR_SIGMA, SSIM_BLUR_SIGMA, 0))
         result["ssim_blur"] = float(ssim(a_blur, b_blur, channel_axis=-1, data_range=1.0))
 
         # ΔE2000 in Lab. rgb2lab expects [0,1] sRGB.
@@ -357,7 +358,7 @@ def main():
     if stats["ssim"] is not None:
         de = stats["deltaE2000"]
         print(f"  SSIM:      {stats['ssim']:.4f}   (1.0 = identical, >0.98 ≈ visually identical)")
-        print(f"  SSIM_blur: {stats['ssim_blur']:.4f}   (σ=4 Gaussian, robust to noise misalignment)")
+        print(f"  SSIM_blur: {stats['ssim_blur']:.4f}   (σ={SSIM_BLUR_SIGMA:g} Gaussian, robust to noise misalignment)")
         print(f"  MS-SSIM:   {stats['ms_ssim']:.4f}   (3-scale approximation)")
         print(f"  ΔE2000:    mean={de['mean']:5.2f}  p95={de['p95']:5.2f}  max={de['max']:5.2f}")
     else:

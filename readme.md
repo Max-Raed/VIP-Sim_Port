@@ -26,9 +26,9 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 ## ✨ Highlights
 
 - **20 visual-impairment filters** spanning color, optical, field-loss, distortion, and time-varying effects.
-- **25 clinical presets** that map named conditions (e.g. *macular degeneration*, *diplopia*, *scintillating scotoma*) to ready-made filter chains.
-- **Two backends, one behavior** — a NumPy/PIL reference (`vipsim_filters.py`) and a batched PyTorch port (`vipsim_gpu.py`) that reduces every filter to one of three GPU primitives.
-- **Proven Unity equivalence** — 17 of 19 tracked filters validated by either source-level proof or a published image-similarity metric stack (SSIM, ΔE2000, Wasserstein-1, LPIPS).
+- **24 clinical presets** that map named conditions (e.g. *macular degeneration*, *diplopia*, *scintillating scotoma*) to ready-made filter chains.
+- **Two backends** — a NumPy/PIL reference (`vipsim_filters.py`) and a batched PyTorch port (`vipsim_gpu.py`). The GPU port currently covers `cvd` (deuteranomaly), `bcg` and `blur`; its `vortex` is a placeholder swirl, not the CPU filter.
+- **Checked against Unity** — 17 of 19 tracked filters pass the repo's SSIM_blur criterion against matched Unity captures; read the [caveats](#-validation) before citing this.
 - **Drop-in Gym/MyoSuite wrapper** for applying impairment chains to RL observations on-device.
 - **Zero-dependency CLI** for one-off image processing.
 
@@ -36,7 +36,7 @@ The original VIP-Sim runs as a stack of HLSL shaders inside Unity. This reposito
 
 | File | Role |
 |---|---|
-| `vipsim_filters.py` | CPU reference implementation — 20 filters, 25 presets, and a CLI. The source of truth for behavior. |
+| `vipsim_filters.py` | CPU reference implementation — 20 filters, 24 presets, and a CLI. The source of truth for behavior. |
 | `vipsim_gpu.py` | PyTorch port operating on batched, channels-first tensors `[N, 3, H, W]`. Includes a Gym/MyoSuite observation wrapper. |
 | `vipsim_equivalence_report.md` | The validation document: how the Python port is shown to reproduce the Unity shaders, with methods, metrics, and results. |
 | `vipsim_profiles_v2/` | The 7 validated VIP-Sim participant profiles as filter stacks (`p1-p7.json`), calibrated against the paper's Figure-6 panels, with side-by-side renders. |
@@ -101,7 +101,6 @@ x = torch.rand(8, 3, 256, 256, device="cuda")   # batch of 8 frames in [0,1]
 
 x = sim.cvd(x, severity=0.8)
 x = sim.blur(x, severity=0.4)
-x = sim.vortex(x, severity=0.5)
 ```
 
 ### Inside an RL / MyoSuite environment
@@ -161,7 +160,7 @@ Presets bundle one or more filters under a recognizable name. A selection:
 | `photophobia` | Glare sensitivity |
 | `nystagmus_motion` / `floaters` / `visual_noise` | Motion blur, floaters, visual snow |
 
-Run `python vipsim_filters.py --list-presets` for the full set of 25 with descriptions.
+Run `python vipsim_filters.py --list-presets` for the full set of 24 with descriptions.
 
 ## 🧑‍🤝‍🧑 Participant profiles (`vipsim_profiles_v2/`)
 
@@ -188,7 +187,7 @@ to switch them off without deleting them; all scripts in this repo honor that.
 
 ## 🔬 Under the hood (GPU port)
 
-The PyTorch backend reduces all ~20 filters to **three primitives**, which is why it stays fast and batched:
+The PyTorch backend is built around **three primitives**, which is why it stays fast and batched. So far `cvd`, `bcg` and `blur` are ported (`cvd` and `bcg` are checked against the CPU reference by `tests/`, `blur` only by `validation_scripts/validate_gpu_vs_numpy.py`); the list below is how the remaining filters map onto the primitives:
 
 1. **Elementwise / 3×3 matmul** → `einsum` + arithmetic — *cvd, bcg, monochrome, noise, posterize, tint…*
 2. **Separable blur / pooling** → `conv2d`, `avg_pool2d` — *blur, bloom, field-loss mip pyramids, cataract frost…*
@@ -200,26 +199,41 @@ Anything that doesn't depend on the image content (warp grids, masks, Gaussian k
 
 The Python port isn't just visually plausible — it's checked against the Unity original. Two complementary methods are used, documented in full in [`vipsim_equivalence_report.md`](vipsim_equivalence_report.md):
 
-- **Method A — algorithmic proof.** For pure deterministic arithmetic filters (`bcg`, `cvd`, `field_loss`), the HLSL fragment math and the NumPy code are lined up and shown to compute the same function. A confirmatory Unity render only confirms the residual sits at the fp16/fp32 rounding floor.
+- **Method A — algorithmic proof.** For pure deterministic arithmetic filters (`bcg`, `cvd`), the HLSL fragment math and the NumPy code are lined up and shown to compute the same function. Fed Unity's own unfiltered capture, both match the Unity render to within 1 level (MAE 0.14 for bcg, 0.07 for cvd).
 - **Method B — measured fidelity.** For everything else (noise, kernels, halo scatter, UV warps, gaze-contingent and time-varying effects), matched 2048×1024 captures are compared through a stack of published metrics: **MAE, SSIM, SSIM_blur, ΔE2000, Wasserstein-1, LPIPS**.
 
-A filter is **validated** when its best sweep point reaches **SSIM_blur ≥ 0.90** against the matched Unity reference. SSIM_blur (a σ=1px pre-blur before SSIM) is the operational criterion because several filters introduce sub-pixel offsets that are invisible to a human but punish plain SSIM.
+A filter passes when its best sweep point reaches **SSIM_blur ≥ 0.90** against the matched Unity reference. SSIM_blur is SSIM after a σ = 4 px Gaussian pre-blur of both images (`validation_scripts/metric_constants.py`), which discounts detail finer than about 10 px.
 
 For the three inherently time-varying filters (`flickering_stars`, `wiggle`, `nystagmus`) a **burst-frame protocol** captures 30 matched frames over a fixed window and aggregates the metric across them.
 
-**Status: 17 of 19 tracked filters validated.** `glitch` sits just below threshold (SSIM_blur 0.890, non-deterministic) and `led` is marginal pending cell-phase tuning.
+**Status: 17 of 19 tracked filters pass.** `glitch` sits just below threshold (SSIM_blur 0.890, non-deterministic) and `led` is marginal pending cell-phase tuning.
+
+**Caveats (audit, 2026-10-29).** A pass is weaker evidence than it looks:
+
+- The unfiltered image already scores SSIM_blur ≥ 0.90 against 12 of the 17 passing Unity references, so for those filters the criterion does not separate the port from doing nothing. Of the passing filters only `bcg`, `cataracts` and `double_vision` are clearly separated; `cvd` rests on its Method A proof instead.
+- The best sweep point is chosen on the same reference it is scored against; nothing is held out.
+- The Unity references were rendered from a block-compressed (DXT/BC1) copy of the input, so Unity and Python start from images that differ by MAE ≈ 2.6. That offset, not fp16 rounding, is the ~3 MAE "floor" in the results table.
+- The `flickering_stars` and `nystagmus` burst validators test their own time-aware models, not `apply_flickering_stars` / `apply_nystagmus`.
+- `field_loss` has no source-level proof and is now listed under Method B.
 
 ### Reproduce the sweep
 
 ```bash
 source .venv/bin/activate
-python scripts/validate_all_filters.py --no-strips
+python validation_scripts/validate_all_filters.py --no-strips
 
 # burst-frame validators for the time-varying filters
-python scripts/validate_flickering_stars_burst.py
-python scripts/validate_wiggle_burst.py
-python scripts/validate_nystagmus_burst.py
+python validation_scripts/validate_flickering_stars_burst.py
+python validation_scripts/validate_wiggle_burst.py
+python validation_scripts/validate_nystagmus_burst.py
 ```
+
+### Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 
 ## 📚 References
 

@@ -28,12 +28,15 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter
 from skimage.metrics import structural_similarity as _ssim
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from metric_constants import SSIM_BLUR_SIGMA  # noqa: E402
+
 # Add repo root to sys.path so we can import vipsim_filters from anywhere.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vipsim_filters import apply_wiggle  # noqa: E402
 
 
-def ssim_blur(a: np.ndarray, b: np.ndarray, sigma: float = 4.0) -> float:
+def ssim_blur(a: np.ndarray, b: np.ndarray, sigma: float = SSIM_BLUR_SIGMA) -> float:
     a01 = a.astype(np.float32) / 255.0
     b01 = b.astype(np.float32) / 255.0
     af = gaussian_filter(a01, sigma=(sigma, sigma, 0))
