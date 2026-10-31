@@ -109,6 +109,39 @@ class TestFloatersSampler(unittest.TestCase):
                                                             np.sin(rad), 1024.0)
                     self.assertAlmostEqual(p / exact, 1.0, delta=1e-3)
 
+    # Rotated: a small round Gaussian tilted by 0.03 degrees and two thin
+    # ellipses, where the line through the centre crosses a frame edge inside
+    # the integration range.  Parameters as apply_floaters derives them; the
+    # values are scipy multivariate_normal.cdf (abseps=1e-14) and quad
+    # conditioned on x and on y, which agree to 1e-9.
+    ROTATED = ((1042.0152375613443, 576.1103522726089, 3.4689434504226266,
+                3.4689434504226266, -0.03088682521694854, 1.033036672e-07),
+               (-33.09965573837451, 12.68955623074828, 128.5509272185956,
+                1.1663899096118466, 151.74263039481275, 1.138183079e-07),
+               (-257.59673335083085, 904.0559432517198, 2739.8007792332273,
+                1.0811504701228878, 25.65676268157199, 8.629678332e-08))
+
+    def test_frame_probability_rotated(self):
+        for mu_x, mu_y, sx, sy, angle, ref in self.ROTATED:
+            rad = np.deg2rad(angle)
+            with self.subTest(angle=angle):
+                p = filters._gaussian_frame_probability(mu_x, mu_y, sx, sy, np.cos(rad),
+                                                        np.sin(rad), 1024.0)
+                self.assertAlmostEqual(p / ref, 1.0, delta=1e-6)
+
+    def test_threshold_rotated(self):
+        # Within 15% of the threshold on either side, the decision follows
+        # the true probability.
+        for mu_x, mu_y, sx, sy, angle, ref in self.ROTATED:
+            rad = np.deg2rad(angle)
+            args = (mu_x, mu_y, sx, sy, np.cos(rad), np.sin(rad), 1024.0)
+            with self.subTest(angle=angle):
+                if ref >= filters._FLOATER_MIN_ACCEPTANCE:
+                    filters._check_gaussian_reachable(*args)
+                else:
+                    with self.assertRaisesRegex(ValueError, "no point would land"):
+                        filters._check_gaussian_reachable(*args)
+
     def test_threshold(self):
         # 4.1 and 5.6 sigma off the right edge: in-frame probability about
         # 2e-5 and 1e-8, on either side of _FLOATER_MIN_ACCEPTANCE (1e-7).
@@ -117,6 +150,59 @@ class TestFloatersSampler(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no point would land"):
             filters._check_gaussian_reachable(1024 + 5.6 * sigma, 512, sigma, sigma, 1.0, 0.0,
                                               1024.0)
+
+    def test_one_element_array_parameters(self):
+        # A 1-element array broadcasts like the scalar in the sampler: the
+        # image is the scalar's, and the check judges the value.
+        img = noise_image()
+        args = {"n_floaters": 200, "seed": 1, "distribution": "gaussian"}
+        for kw, ref in (({"angle": np.array([30.0])}, {"angle": 30.0}),
+                        ({"spread": np.array([0.1])}, {"spread": 0.1}),
+                        ({"spread_x": np.array([0.05])}, {"spread_x": 0.05}),
+                        ({"angle": np.array([[30.0]])}, {"angle": 30.0}),
+                        ({"center": (np.array([0.3]), 0.7)}, {"center": (0.3, 0.7)})):
+            with self.subTest(**{k: repr(v) for k, v in kw.items()}):
+                np.testing.assert_array_equal(
+                    np.asarray(vipsim.apply_floaters(img, 0.6, **args, **kw)),
+                    np.asarray(vipsim.apply_floaters(img, 0.6, **args, **ref)))
+        with mock.patch.object(np.random, "default_rng", lambda seed=None: NoDraws()), \
+                self.assertRaisesRegex(ValueError, "no point would land"):
+            vipsim.apply_floaters(img, 1.0, n_floaters=1, distribution="gaussian",
+                                  center=(np.array([5.0]), 5.0), spread=0.01)
+
+    def test_few_floaters_below_min_acceptance_still_sample(self):
+        # 5.2 sigma off the right edge (p ~ 9.96e-8): one floater needs ~1e7
+        # draws, which the old loop finished in seconds to minutes; ten
+        # would need ~1e8 and raise, as does one floater at 5.7 sigma.
+        sigma = 10.24
+        mu = 1024 + 5.2 * sigma
+        filters._check_gaussian_reachable(mu, 512, sigma, sigma, 1.0, 0.0, 1024.0, 1)
+        for x, n in ((mu, 10), (1024 + 5.7 * sigma, 1)):
+            with self.subTest(sigmas=(x - 1024) / sigma, n_floaters=n), \
+                    self.assertRaisesRegex(ValueError, "no point would land"):
+                filters._check_gaussian_reachable(x, 512, sigma, sigma, 1.0, 0.0, 1024.0, n)
+        img = noise_image()
+        out = vipsim.apply_floaters(img, 0.5, n_floaters=1, seed=3, distribution="gaussian",
+                                    center=(0.5, 1.052), spread=0.01)
+        self.assertEqual((np.asarray(out) != np.asarray(img.convert("RGB"))).any(-1).sum(), 1)
+
+    def test_slow_but_reachable_parameters_warn_before_sampling(self):
+        # 5 sigma off the right edge passes the floor, but the default 50000
+        # floaters then need ~1.7e11 draws (about 2 h): warn first.
+        img = noise_image()
+        with mock.patch.object(np.random, "default_rng", lambda seed=None: NoDraws()), \
+                self.assertWarnsRegex(RuntimeWarning, r"need about 1\.74e\+11 draws"), \
+                self.assertRaisesRegex(AssertionError, "the sampler drew"):
+            vipsim.apply_floaters(img, 1.0, distribution="gaussian", center=(0.5, 1.05),
+                                  spread=0.01)
+        # In-frame and moderately off-frame parameters stay silent.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            for n in (1, 50000):
+                filters._check_gaussian_reachable(512, 512, 164, 164, 1.0, 0.0, 1024.0, n)
+            filters._check_gaussian_reachable(1024 + 2.5 * 10.24, 512, 10.24, 10.24, 1.0, 0.0,
+                                              1024.0, 500)
 
     def test_low_but_nonzero_acceptance_still_finishes(self):
         # A centre 2.5 sigma off-frame accepts ~0.6% of draws: slow, not stuck,

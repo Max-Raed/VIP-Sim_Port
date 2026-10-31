@@ -193,5 +193,32 @@ class TestGpuLedMatchesCpu(GpuResampleCase):
             self.sim.led(x, 0.6, brightness=per_pixel)
 
 
+    def test_brightness_types_follow_the_cpu_product(self):
+        # apply_led computes cells * brightness: np.matrix is a matrix product
+        # and a torch tensor is no numpy operand (the CPU raises), numpy.ma
+        # keeps a masked channel's level, and a 4-D broadcast leaves an image
+        # Image.fromarray rejects.
+        import torch
+        a = self.frames["random_84x84"]
+        img, x = Image.fromarray(a), self.vg.frames_to_gpu(a[None], self.sim.device)
+        for bad, exc in ((np.matrix([[0.5, 1.7, 1.0]]), ValueError),
+                         (np.matrix([[1.3]]), ValueError),
+                         (torch.tensor([0.5, 1.0, 1.0]), TypeError),
+                         (np.ones((1, 1, 1, 3)), TypeError),
+                         (np.ones((2, 1, 1, 3)), TypeError)):
+            with self.subTest(brightness=bad):
+                with self.assertRaises(exc):
+                    vipsim.apply_led(img, 0.6, brightness=bad)
+                with self.assertRaises(exc):
+                    self.sim.led(x, 0.6, brightness=bad)
+        for b in (np.ma.array([0.5, 1.7, 1.0], mask=[0, 1, 0]),
+                  np.ma.array([0.5, 1.7, 1.0], np.float32, mask=False),
+                  np.ma.array([[np.nan, 1.7, 1.0]], mask=[[1, 0, 0]]),
+                  np.ma.array([1.3], mask=[1])):
+            with self.subTest(brightness=b):
+                np.testing.assert_array_equal(
+                    self.vg.gpu_to_frames(self.sim.led(x, 0.6, brightness=b))[0],
+                    np.asarray(vipsim.apply_led(img, 0.6, brightness=b)))
+
 if __name__ == "__main__":
     unittest.main()
