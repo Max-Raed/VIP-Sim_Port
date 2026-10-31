@@ -61,6 +61,7 @@ primitive each filter uses.
 """
 
 from __future__ import annotations
+import functools
 import inspect
 import math
 from collections import OrderedDict
@@ -72,9 +73,10 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFilter
 
 from .filters import (CVD_MATRICES, PRESETS, _FILTER_DISPATCH,
-                      _apply_bcg_per_channel, _box_muller, _linear_to_srgb,
+                      _box_muller, _linear_to_srgb,
                       _load_macular_overlay, _perlin_noise_2d,
-                      _radial_weight_mask, _srgb_to_linear, _to_uint8)
+                      _radial_weight_mask, _srgb_to_linear, _to_uint8,
+                      apply_cataracts)
 
 
 # -----------------------------------------------------------------------------
@@ -96,7 +98,16 @@ def exact_div(x: torch.Tensor, divisor: float) -> torch.Tensor:
     which is 1 ulp off for about half of k/255; a device-tensor divisor
     takes the true-division kernel.
     """
-    return x / torch.tensor(divisor, dtype=x.dtype, device=x.device)
+    return x / _device_scalar(divisor, math.copysign(1.0, divisor),
+                              x.dtype, x.device)
+
+
+@functools.lru_cache(maxsize=64)
+def _device_scalar(value, sign, dtype, device) -> torch.Tensor:
+    """torch.tensor(value) on the device, built once: each build copies from
+    host memory, which waits for all queued GPU work.  `sign` keeps 0.0 and
+    -0.0, which compare equal, apart."""
+    return torch.tensor(value, dtype=dtype, device=device)
 
 
 def _u8(x: torch.Tensor, scale: float = 255.0) -> torch.Tensor:
@@ -543,14 +554,15 @@ def _channel_lookup(lut: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
 
 def _cataract_levels(severity: float, use_brightness, use_contrast,
                      contrast_coeff, gamma) -> np.ndarray:
-    """uint8 [3, 256]: apply_cataracts' BCG step on every level, rounded with
-    _to_uint8 (the frost step after it only copies pixels)."""
-    brightness = (1.0 - severity) if use_brightness else 1.0
-    contrast = (1.0 - severity) if use_contrast else 1.0
-    arr = np.repeat(_LEVELS[None, :, None], 3, axis=2)         # (1, 256, 3)
-    arr = _apply_bcg_per_channel(arr, brightness, contrast,
-                                 coeffs=contrast_coeff, gamma=1.0 / gamma)
-    return _to_uint8(arr)[0].T
+    """uint8 [3, 256]: apply_cataracts' BCG step on every level (the frost step
+    after it only copies pixels), read from apply_cataracts itself on a
+    1x256 grey ramp with frosting off."""
+    ramp = np.repeat(np.arange(256, dtype=np.uint8)[None, :, None], 3, axis=2)
+    out = apply_cataracts(Image.fromarray(ramp), severity,
+                          use_brightness=use_brightness,
+                          use_contrast=use_contrast, use_frosting=False,
+                          contrast_coeff=contrast_coeff, gamma=gamma)
+    return np.asarray(out)[0].T.copy()
 
 
 def _cataract_frost_maps(h: int, w: int, severity: float) -> tuple:
@@ -1129,7 +1141,7 @@ def skimage_hsv2rgb(x: torch.Tensor) -> torch.Tensor:
     p = v * (1 - s)
     q = v * (1 - f * s)
     t = v * (1 - (1 - f) * s)
-    sectors = torch.tensor(_HSV_SECTORS, device=x.device)
+    sectors = _device_scalar(_HSV_SECTORS, 1.0, torch.long, x.device)
     pick = sectors[hi.long() % 6].movedim(-1, 1)                  # [N, 3, ...]
     return torch.stack((v, p, q, t), 1).gather(1, pick)
 
