@@ -46,7 +46,13 @@ LED_KWARGS = [dict(scale=80), dict(scale=33.3), dict(scale=7), dict(scale=500),
               dict(scale=np.float64(33.3)), dict(margin=np.float64(0.1)),
               dict(brightness=np.float32(1.3)),
               dict(severity=float("nan")), dict(shape=np.inf), dict(shape=1e20),
-              dict(brightness=np.inf), dict(brightness=float("nan"))]
+              dict(brightness=np.inf), dict(brightness=float("nan")),
+              # Per channel, as apply_led multiplies its (h, w, 3) cells:
+              # a list is float64, a float32 array stays float32.
+              dict(brightness=[0.5, 1.0, 1.0]), dict(brightness=np.array([1.0, 1.0, 1.0])),
+              dict(brightness=np.array([0.3, 1.7, 0.9], np.float32)),
+              dict(brightness=np.array([[1.3]])), dict(brightness=np.array([[[0.6, 1.2, 2.0]]])),
+              dict(brightness=[float("nan"), np.inf, 0.5])]
 # (width, height) -> (width, height) where the pass order shows: Pillow 13
 # goes vertical first for the first two (height shrinks by more than twice
 # the width change), Pillow 12.2 for the last two (over 100x taller than
@@ -164,6 +170,27 @@ class TestGpuLedMatchesCpu(GpuResampleCase):
         x = self.to_gpu(self.frame)
         for s in (0.0, -1.0):
             self.assertIs(self.sim.led(x, s), x)
+
+    def test_per_channel_brightness_batch_and_bad_shapes(self):
+        a, b = self.frames["random_84x84"], self.frames["traffic_84x84"]
+        x = self.vg.frames_to_gpu(np.stack([a, b]), self.sim.device)
+        kw = dict(severity=0.7, brightness=[0.4, 1.0, 1.9], margin=0.1)
+        out = self.vg.gpu_to_frames(self.sim.led(x, **kw))
+        for i, frame in enumerate((a, b)):
+            np.testing.assert_array_equal(
+                out[i], np.asarray(vipsim.apply_led(Image.fromarray(frame), **kw)))
+        img = Image.fromarray(a)
+        for bad in ([0.5, 1.0], [0.5, 1.0, 1.0, 1.0], np.ones((2, 3))):
+            with self.subTest(brightness=bad):
+                with self.assertRaises(ValueError):
+                    vipsim.apply_led(img, 0.6, brightness=bad)
+                with self.assertRaises(ValueError):
+                    self.sim.led(x, 0.6, brightness=bad)
+        # Per-pixel brightness: the CPU takes it, no level table can hold it.
+        per_pixel = np.linspace(0.5, 1.5, 84)[:, None, None]
+        vipsim.apply_led(img, 0.6, brightness=per_pixel)
+        with self.assertRaises(NotImplementedError):
+            self.sim.led(x, 0.6, brightness=per_pixel)
 
 
 if __name__ == "__main__":

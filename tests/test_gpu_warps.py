@@ -314,6 +314,14 @@ class TestGpuWarpsEdgeCases(GpuWarpCase):
                  ("wiggle", 0.5, {"mode": "simple", "timer": nan}),
                  ("double_vision", nan, {}),
                  ("nystagmus", nan, {})]
+        # vortex's arr[y0, x0] covers pixels outside the field too: suction
+        # inf * 0 at the rim is NaN there while every inside pixel is finite.
+        inf = float("inf")
+        cases += [("vortex", 0.5, kw) for kw in (
+            {"vortex_radius": inf}, {"noise_amount": inf}, {"noise_amount": -inf},
+            {"suction_strength": inf}, {"suction_strength": -inf},
+            {"suction_strength": nan}, {"swirl_strength": inf},
+            {"swirl_strength": nan}, {"falloff_exponent": nan})]
         for name, s, kw in cases:
             with self.subTest(filter=name, severity=s, **kw), np.errstate(invalid="ignore"):
                 with self.assertRaises(Exception) as cpu:

@@ -90,6 +90,17 @@ class TestSrgbConversions(unittest.TestCase):
                 np.testing.assert_array_equal(got, want)
                 self.assertEqual(np.asarray(got).dtype, want.dtype)
 
+    def test_ndarray_subclasses_come_back_as_plain_arrays(self):
+        # The old expressions passed their result through np.asarray or
+        # np.where; the in-place path would return the input's subclass.
+        for x in (np.ma.array([0.5, 0.2], mask=[False, True]),
+                  np.ma.array([0.5, 0.2], mask=[False, True], dtype=np.float32),
+                  np.asmatrix([[0.5, 0.2]])):
+            with self.subTest(x=type(x).__name__, dtype=x.dtype.name):
+                self.assertIs(type(vf._to_uint8(x)), np.ndarray)
+                np.testing.assert_array_equal(vf._to_uint8(x), to_uint8_reference(x))
+                self.assertIs(type(vf._linear_to_srgb(x)), np.ndarray)
+
     def test_8bit_levels_survive_decode_to_float_and_back(self):
         # apply_vortex copies pixels outside its field straight from the input.
         levels = np.arange(256, dtype=np.uint8)
@@ -143,13 +154,35 @@ class TestFloaterBlobs(unittest.TestCase):
         self.check(9, 7, 200, [3, 60, 300], 0.4, 255.0, seed=3)
         self.check(240, 420, 5000, [2, 3, 5, 9], 0.34, 255.0, seed=4)
 
+    def test_chunk_boundaries_inside_and_between_blobs(self):
+        # Small chunks split boxes mid-row and mid-blob; the stream and the
+        # hit counts must come out the same as in one chunk.
+        default = vf._BLOB_DRAWS_PER_CHUNK
+        try:
+            for chunk in (1, 7, 64, 1000):
+                vf._BLOB_DRAWS_PER_CHUNK = chunk
+                with self.subTest(chunk=chunk):
+                    self.check(37, 53, 300, [2, 3, 5, 40, 90], 0.3, 255.0, seed=7)
+                    self.check(9, 7, 50, [3, 60, 300], 0.4, 0.0, seed=8)
+        finally:
+            vf._BLOB_DRAWS_PER_CHUNK = default
+
     def test_float_sizes_and_no_blobs(self):
         self.check(31, 45, 500, [2.5, 3.0, 6.5], 0.7, 0.0, seed=5)
         self.check(31, 45, 0, [2], 0.7, 0.0, seed=6)
 
+    def test_huge_finite_sizes_paint_like_the_loop(self):
+        # The loop's int(round(...)) never fails on a finite size; its box is
+        # clipped to the frame.  Sizes from 2**52 px take that loop again.
+        w = 45
+        for size in (2.0 ** 63 * 1024 / w, 1e19 * 1024 / w, (2.0 ** 64 - 2048) * 1024 / w,
+                     -1e30, 2.0 ** 52 * 1024 / w):
+            with self.subTest(size=size):
+                self.check(31, w, 3, [2.0, size], 0.5, 255.0, seed=9)
+
     def test_sizes_that_cannot_be_converted_raise_like_the_loop(self):
         # apply_floaters(floater_size=nan/inf/1e30, size_variance=True).
-        for bad in (np.nan, np.inf, 1e30):
+        for bad in (np.nan, np.inf, -np.inf, 1e30, 2.0 ** 64 * 1024 / 45 * 1.01):
             out = np.zeros((31, 45, 3), np.float32)
             xs, ys = np.array([3, 10, 20]), np.array([4, 5, 6])
             sizes = np.array([2.0, bad, 3.0])
@@ -414,6 +447,55 @@ class TestVortexBoundingBox(unittest.TestCase):
         {"noise_amount": np.array([0.1])},
     ]
 
+    def assert_same_outcome(self, img, sev, **kw):
+        """apply_vortex returns the reference's image, or raises its error."""
+        try:
+            want = np.asarray(vortex_reference(img, sev, **kw))
+        except Exception as e:
+            with self.assertRaises(type(e)):
+                vf.apply_vortex(img, sev, **kw)
+        else:
+            np.testing.assert_array_equal(np.asarray(vf.apply_vortex(img, sev, **kw)), want)
+
+    def test_unusual_kwargs_use_the_whole_frame(self):
+        # Array, list and integer-typed kwargs, negative and huge radii: the
+        # bounding box does not apply, and the result is the old one.
+        cases = [
+            ((1, 9), {"falloff_exponent": np.array([0.1, 0.2, 0.3])}),
+            ((1, 9), {"noise_scale": np.array([5.0, 9.0, 13.0])}),
+            ((1, 9), {"swirl_strength": [0.1, 0.2, 0.3]}),
+            ((1, 9), {"center": (0.5, np.array([0.2, 0.5, 0.8]))}),
+            ((1, 1), {"suction_strength": np.array([0.5, 1.0, 1.5])}),
+            ((64, 48), {"noise_amount": [0.3]}),
+            ((64, 48), {"noise_amount": (0.3,)}),
+            ((2, 2), {"vortex_radius": [0.3]}),
+            ((64, 48), {"vortex_radius": [0.1, 0.2, 0.3]}),
+            ((64, 48), {"vortex_radius": -1e40}),
+            ((64, 48), {"vortex_radius": -3.5e38}),
+            ((64, 48), {"noise_amount": np.uint8(200), "vortex_radius": -2}),
+            ((10, 200), {"vortex_radius": np.uint8(1), "noise_amount": np.uint8(128)}),
+            ((300, 400), {"vortex_radius": np.uint8(1), "noise_amount": 0}),
+            ((64, 48), {"suction_strength": np.full((48, 64), 1.5)}),
+        ]
+        for (w, h), kw in cases:
+            with self.subTest(size=(w, h), **{k: repr(v) for k, v in kw.items()}):
+                self.assert_same_outcome(noise_image(h, w, seed=w + h), 0.5, **kw)
+
+    def test_float32_field_edge_far_from_origin(self):
+        # The field is computed in float32; far from the origin its rounding
+        # is wider than the box's 2 px margin, so those take the whole frame.
+        cases = [
+            ((256, 256), {"center": (0.5, 7e5), "vortex_radius": 699999.51, "noise_amount": 0}),
+            ((256, 256), {"center": (0.5, 7e5), "vortex_radius": 699999.45, "noise_amount": 0}),
+            ((256, 256), {"center": (0.5, 4e6), "vortex_radius": 3999999.49, "noise_amount": 0}),
+            ((256, 256), {"center": (1e6, 0.5), "vortex_radius": 999999.45, "noise_amount": 0}),
+            ((300, 90), {"center": (np.float32(1.1678415e6), np.float32(0.1093228)),
+                         "vortex_radius": 1167841.19, "noise_amount": 0}),
+        ]
+        for (w, h), kw in cases:
+            with self.subTest(size=(w, h), **{k: repr(v) for k, v in kw.items()}):
+                self.assert_same_outcome(noise_image(h, w, seed=3), 0.5, **kw)
+
     def test_matches_full_frame(self):
         for h, w in [(48, 80), (31, 17), (5, 7)]:
             img = noise_image(h, w, seed=h)
@@ -423,6 +505,17 @@ class TestVortexBoundingBox(unittest.TestCase):
                         want = vortex_reference(img, sev, **kw)
                         got = vf.apply_vortex(img, sev, **kw)
                         np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+
+class TestFieldLossMaskKwargs(unittest.TestCase):
+    def test_array_mask_centre_takes_the_stacked_lookup(self):
+        # An array component broadcasts the per-pixel level to another shape;
+        # the pairwise blend needs (h, w), so these use the old lookup.
+        for (w, h), centre in (((1, 9), (0.5, np.array([0.1, 0.5, 0.9]))),
+                               ((9, 1), (np.array([0.1, 0.5, 0.9]), 0.5))):
+            with self.subTest(size=(w, h)):
+                out = vf.apply_field_loss(noise_image(h, w, seed=1), 0.6, mask_center=centre)
+                self.assertEqual(np.asarray(out).shape[2], 3)
 
 
 class TestLedBrightness(unittest.TestCase):

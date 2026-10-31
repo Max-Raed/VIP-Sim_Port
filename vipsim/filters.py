@@ -14,6 +14,7 @@ Usage (installed: `vipsim ...` or `python -m vipsim ...`):
 """
 
 import argparse
+import math
 from pathlib import Path
 
 import numpy as np
@@ -108,10 +109,12 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
 # =============================================================================
 
 def _check_blur_radius(radius) -> None:
-    """Raise ValueError where Pillow 13's GaussianBlur does: a NaN or
-    infinite radius ("radius must be >= 0"), or one of 2**31 - 64 px or more
-    either way ("radius too large").  Pillow 12 segfaults on those radii,
-    taking the whole interpreter down."""
+    """Raise ValueError for exactly the radii Pillow 13's GaussianBlur
+    rejects: NaN, infinite, or 2**31 - 64 px or more either way.  Pillow 12
+    segfaults on those radii, taking the whole interpreter down.  The
+    messages are Pillow 13's ("radius must be >= 0", "radius too large"),
+    but beyond ~1.4e15 px Pillow 13 picks between them by float32 rounding,
+    so there only the exception type is guaranteed to match."""
     r = float(radius)
     if not np.isfinite(r):
         raise ValueError("radius must be >= 0")
@@ -169,7 +172,7 @@ def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
     # np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055),
     # evaluated in place: the same arithmetic per element, fewer temporaries.
     out = np.power(x, 1.0 / 2.4)
-    if not isinstance(out, np.ndarray):  # scalar or 0-d input
+    if type(out) is not np.ndarray:  # scalar, 0-d input or ndarray subclass
         return np.where(x <= 0.0031308, x * 12.92, 1.055 * out - 0.055)
     out *= 1.055
     out -= 0.055
@@ -184,7 +187,7 @@ def _to_uint8(x: np.ndarray, scale: float = 255.0) -> np.ndarray:
     darker, and the bias accumulates when filters are chained.
     """
     y = np.multiply(x, scale)
-    if not (isinstance(y, np.ndarray) and y.dtype.kind == "f"):
+    if not (type(y) is np.ndarray and y.dtype.kind == "f"):
         return np.clip(np.rint(np.asarray(x) * scale), 0, 255).astype(np.uint8)
     np.rint(y, out=y)
     np.clip(y, 0, 255, out=y)
@@ -701,7 +704,15 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
 
     # Bias = w * (n_levels - 1): per-pixel float "level"
     bias = w_scaled * (n_levels - 1)
-    out = _blend_mip_levels(arr, bias, n_levels)
+    if bias.shape == (h, w):
+        out = _blend_mip_levels(arr, bias, n_levels)
+    else:  # array mask kwargs broadcast bias to another shape: as before
+        lo = np.floor(bias).astype(np.int32)
+        hi = np.clip(lo + 1, 0, n_levels - 1)
+        frac = (bias - lo)[..., None]
+        stack = np.stack(_build_mip_pyramid(arr, n_levels), axis=0)
+        iy, ix = np.indices((h, w))
+        out = (stack[lo, iy, ix] * (1 - frac) + stack[hi, iy, ix] * frac)
 
     return Image.fromarray(_to_uint8(out))
 
@@ -1230,20 +1241,33 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
     # are clipped to them too), and |value noise| < 1, so every changed pixel
     # has dist < R + |noise_amount * R|. Compute only inside that ellipse's
     # bounding box (+2 px for rounding), on the same global pixel coordinates.
-    reach = vortex_radius + abs(noise_amount * vortex_radius)
-    reach_up = reach / abs(ys_up) if ys_up else np.inf
-    reach_dn = reach / abs(ys_dn) if ys_dn else np.inf
-    # |dx| < reach  <=>  |col + 0.5 - cx * w| < reach * h, likewise for rows
-    bounds = (np.floor(cx * w - 0.5 - reach * h) - 2,
-              np.ceil(cx * w - 0.5 + reach * h) + 3,
-              np.floor(cy * h - 0.5 - reach_up * h) - 2,
-              np.ceil(cy * h - 0.5 + reach_dn * h) + 3)
-    if all(np.ndim(b) == 0 for b in bounds) and np.all(np.isfinite(bounds)):
-        c0 = int(min(w, max(0, bounds[0])))
-        c1 = int(max(0, min(w, bounds[1])))
-        r0 = int(min(h, max(0, bounds[2])))
-        r1 = int(max(0, min(h, bounds[3])))
-    else:  # non-finite centre/reach, or array-valued kwargs: whole frame
+    use_box = _vortex_box_ok(
+        (cy, cx, vortex_radius, radius_y, radius_y_down, suction_strength,
+         falloff_exponent, swirl_strength, inner_circle_radius, inner_fade,
+         inner_opacity, halo_radius, halo_thickness, halo_opacity,
+         noise_amount, noise_scale, fade_width),
+        (inner_center, halo_center), (inner_color, halo_color))
+    if use_box:
+        R, A = float(vortex_radius), float(noise_amount)
+        fcx, fcy = float(cx), float(cy)
+        reach = R + abs(A * R)
+        reach_up = reach / abs(float(ys_up)) if ys_up else np.inf
+        reach_dn = reach / abs(float(ys_dn)) if ys_dn else np.inf
+        # The field is computed in float32: keep its rounding (a few ulps of
+        # these magnitudes, in pixels) far below the 2 px margin, and keep
+        # every value inside float32 range. A non-positive reach (negative
+        # radius) also takes the whole frame.
+        scale = h * (aspect * (1.0 + abs(fcx)) + 1.0 + abs(fcy)
+                     + reach + reach_up + reach_dn)
+        use_box = (reach > 0 and np.isfinite(scale) and scale < 2.0 ** 18
+                   and max(abs(R), abs(A)) < 1e30)
+    if use_box:
+        # |dx| < reach  <=>  |col + 0.5 - cx * w| < reach * h, likewise rows
+        c0 = int(min(w, max(0, np.floor(fcx * w - 0.5 - reach * h) - 2)))
+        c1 = int(max(0, min(w, np.ceil(fcx * w - 0.5 + reach * h) + 3)))
+        r0 = int(min(h, max(0, np.floor(fcy * h - 0.5 - reach_up * h) - 2)))
+        r1 = int(max(0, min(h, np.ceil(fcy * h - 0.5 + reach_dn * h) + 3)))
+    else:  # anything unusual: the whole frame, exactly as before
         r0, r1, c0, c1 = 0, h, 0, w
     box = (slice(r0, r1), slice(c0, c1))
 
@@ -1369,9 +1393,40 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
             halo_col = np.full_like(src, halo_color)
             blended = halo_col * h_alpha + blended * (1.0 - h_alpha)
 
-        out[box] = _to_uint8(np.where(inside[..., None], blended, src))
+        res = np.where(inside[..., None], blended, src)
+        # Without the box, return what the whole-frame code returned, even
+        # where array kwargs broadcast it to another shape.
+        if use_box:
+            out[box] = _to_uint8(res)
+        else:
+            out = _to_uint8(res)
 
     return Image.fromarray(out)
+
+
+def _vortex_box_ok(scalars, centres, colours) -> bool:
+    """True when apply_vortex may compute only inside its bounding box.
+
+    Every per-pixel kwarg must be a real (int or float) scalar or None, the
+    centres pairs of them, and the colours broadcast to one value per
+    channel. Array kwargs broadcast the field to their own shape, so they
+    take the whole frame.
+    """
+    def real(v):
+        return v is None or (np.ndim(v) == 0
+                             and np.asarray(v).dtype.kind in "fiu")
+    try:
+        vals = list(scalars)
+        for c in centres:
+            if c is not None:
+                if np.ndim(c) != 1 or len(c) != 2:
+                    return False
+                vals.extend(c)
+        return (all(real(v) for v in vals)
+                and all(np.broadcast_shapes(np.shape(c), (3,)) == (3,)
+                        for c in colours))
+    except Exception:  # let the whole-frame code raise what it raised
+        return False
 
 
 # -- Wiggle ------------------------------------------------------------------
@@ -1785,6 +1840,10 @@ def apply_flickering_stars(img: Image.Image, severity: float = 0.5,
 # Frozen-frame: paint random oriented elliptical translucent blobs over the
 # image (gaze-fixed, single texture frame).
 
+# Mask draws _paint_blobs makes per chunk: about 40 MiB of temporaries.
+_BLOB_DRAWS_PER_CHUNK = 1 << 20
+
+
 def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
                  alpha: float, target_val: float,
                  overlay_size: float = 1024.0) -> None:
@@ -1795,8 +1854,9 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
     side / overlay_size)), clipped to the frame, and blends the box pixels
     where its rng.random(box shape) > 0.4. Vectorised over the blobs, with
     the same result as painting them one at a time:
-      - PCG64 spends one draw per double, so one rng.random call for all
-        boxes in blob order yields the same values (empty boxes draw nothing);
+      - PCG64 spends one draw per double, so rng.random calls over all
+        boxes in blob order, in chunks of any size, yield the same values
+        (empty boxes draw nothing);
       - every hit applies the same float32 blend, so a pixel hit n times gets
         it n times in a row.
     """
@@ -1806,14 +1866,24 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
     f_x = np.asarray(sizes * w / overlay_size, dtype=np.float64)
     f_y = np.asarray(sizes * h / overlay_size, dtype=np.float64)
     bad = ~(np.isfinite(f_x) & np.isfinite(f_y)
-            & (np.abs(f_x) < 2.0 ** 63) & (np.abs(f_y) < 2.0 ** 63))
+            & (np.abs(f_x) < 2.0 ** 52) & (np.abs(f_y) < 2.0 ** 52))
     if bad.any():
-        # astype(int) would wrap these to INT64_MIN; raise what the old
-        # per-blob int(round(...)) raised on the first one instead.
-        i = np.argmax(bad)
-        for f in (f_x[i], f_y[i]):
-            round(float(f))      # ValueError for NaN, OverflowError for inf
-        raise OverflowError("int too big to convert")
+        # astype(int) would wrap these; paint one blob at a time with Python
+        # ints as before, which raises (or not) exactly as it did.
+        for sx, sy, sz in zip(xs, ys, sizes):
+            s_x = max(1, int(round(sz * w / overlay_size)))
+            s_y = max(1, int(round(sz * h / overlay_size)))
+            hx, hy = s_x // 2, s_y // 2
+            x0, x1 = max(0, sx - hx), min(w, sx + hx + 1)
+            y0, y1 = max(0, sy - hy), min(h, sy + hy + 1)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            mask = rng.random((y1 - y0, x1 - x0)) > 0.4
+            for c in range(3):
+                tile = out[y0:y1, x0:x1, c]
+                tile[mask] = tile[mask] * (1.0 - alpha) + target_val * alpha
+                out[y0:y1, x0:x1, c] = tile
+        return
     s_x = np.maximum(1, np.rint(f_x).astype(np.int64))
     s_y = np.maximum(1, np.rint(f_y).astype(np.int64))
     hx, hy = s_x // 2, s_y // 2
@@ -1823,13 +1893,23 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
     bw, bh = (x1 - x0)[keep], (y1 - y0)[keep]
     x0, y0 = x0[keep], y0[keep]
     area = bw * bh
-    hit = rng.random(int(area.sum())) > 0.4
-    # Pixel of every draw: row-major position k within its blob's box
-    k = np.arange(hit.size) - np.repeat(np.cumsum(area) - area, area)
-    bw_k = np.repeat(bw, area)
-    rows = np.repeat(y0, area) + k // bw_k
-    cols = np.repeat(x0, area) + k % bw_k
-    hits = np.bincount((rows * w + cols)[hit], minlength=h * w).reshape(h, w)
+    ends = np.cumsum(area)
+    starts = ends - area
+    total = int(ends[-1]) if ends.size else 0
+    # The draws for all boxes are made in chunks of _BLOB_DRAWS_PER_CHUNK, so
+    # memory stays bounded however large or many the blobs are. Consecutive
+    # rng.random calls continue the same PCG64 stream (one draw per double),
+    # and hit counts add up across chunks.
+    hits = np.zeros(h * w, dtype=np.int64)
+    for s in range(0, total, _BLOB_DRAWS_PER_CHUNK):
+        e = min(total, s + _BLOB_DRAWS_PER_CHUNK)
+        d = s + np.flatnonzero(rng.random(e - s) > 0.4)  # draws that hit
+        b = np.searchsorted(ends, d, side="right")       # blob of each draw
+        k = d - starts[b]   # row-major position within the blob's box
+        bw_k = bw[b]
+        hits += np.bincount((y0[b] + k // bw_k) * w + x0[b] + k % bw_k,
+                            minlength=h * w)
+    hits = hits.reshape(h, w)
 
     r, c = np.nonzero(hits)
     left = hits[r, c]
@@ -1840,19 +1920,90 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
         r, c, left = r[more], c[more], left[more]
 
 
-# apply_floaters' rejection samplers loop until enough points land in the
-# frame; parameters that leave no part of it to sample (a NaN or -inf
-# circle_radius_uv, a Gaussian centred far off-frame, NaN angle or spread)
-# would loop forever.  This many draws in a row with none accepted is
-# beyond any acceptance rate above ~1e-6, so it raises instead.
-_FLOATER_MAX_REJECTED = 10_000_000
+# apply_floaters' Gaussian and disc rejection samplers loop until enough
+# points land in the frame, so parameters under which (almost) no draw can
+# land would loop forever.  They are checked before sampling: a non-finite
+# centre, spread or angle, a disc radius of NaN or -inf, or a Gaussian
+# whose draws land in the frame with probability below this raise
+# ValueError.  Nothing is drawn, so every run that does not raise samples
+# exactly as before (at this rate one point already takes ~1e7 draws).
+_FLOATER_MIN_ACCEPTANCE = 1e-7
 
 
-def _check_floater_rejections(rejected: int) -> None:
-    if rejected >= _FLOATER_MAX_REJECTED:
+def _normal_cdf(z: np.ndarray) -> np.ndarray:
+    """Standard normal CDF, elementwise (NumPy has no erf; math.erfc keeps
+    the core dependencies at numpy and Pillow)."""
+    flat = [0.5 * math.erfc(-float(t) / math.sqrt(2.0)) for t in z.ravel()]
+    return np.asarray(flat, dtype=np.float64).reshape(z.shape)
+
+
+def _gaussian_frame_probability(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
+                                size, n: int = 2048) -> float:
+    """Probability that one draw of apply_floaters' rotated Gaussian lands
+    in [0, size)^2.
+
+    A draw is mu + sigma_x*u*(cos_a, sin_a) + sigma_y*v*(-sin_a, cos_a) with
+    u, v ~ N(0, 1).  For fixed u both frame bounds are linear in v, so the
+    v-mass is a difference of normal CDFs; that is integrated over the
+    range of u that can reach the frame.  The midpoint rule never samples
+    the range ends, where an axis-aligned frame edge makes the integrand
+    jump."""
+    cx = np.array([0.0, size, 0.0, size])
+    cy = np.array([0.0, 0.0, size, size])
+    u_c = ((cx - mu_x) * cos_a + (cy - mu_y) * sin_a) / sigma_x
+    lo, hi = max(float(u_c.min()), -38.0), min(float(u_c.max()), 38.0)
+    if not lo < hi:                     # frame beyond 38 sigma along u
+        return 0.0
+    h = (hi - lo) / n
+    u = lo + h * (np.arange(n) + 0.5)
+    v_lo = np.full(n, -np.inf)
+    v_hi = np.full(n, np.inf)
+    with np.errstate(over="ignore", invalid="ignore"):
+        for mu, a, c in ((mu_x, sigma_x * cos_a, -sigma_y * sin_a),
+                         (mu_y, sigma_x * sin_a, sigma_y * cos_a)):
+            b = mu + a * u              # this coordinate at v = 0
+            if c == 0.0:
+                v_hi = np.where((b >= 0.0) & (b < size), v_hi, -np.inf)
+            else:
+                e0, e1 = -b / c, (size - b) / c
+                v_lo = np.maximum(v_lo, np.minimum(e0, e1))
+                v_hi = np.minimum(v_hi, np.maximum(e0, e1))
+    mass = np.clip(_normal_cdf(v_hi) - _normal_cdf(v_lo), 0.0, None)
+    pdf = np.exp(-0.5 * u * u) / math.sqrt(2.0 * math.pi)
+    return float(h * np.sum(pdf * mass))
+
+
+def _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
+                              size) -> None:
+    """Raise when a draw of the Gaussian sampler lands in the frame with
+    probability below _FLOATER_MIN_ACCEPTANCE (or its parameters are not
+    finite)."""
+    params = np.array([mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a],
+                      dtype=np.float64)
+    if not np.isfinite(params).all():
+        p = 0.0
+    else:
+        # The disc of radius d (centre to nearest edge) lies in the frame and
+        # holds at least 1 - exp(-d^2 / 2 sigma_max^2) of the mass: when that
+        # suffices, skip the integral (~5 ms) for the usual in-frame centre.
+        d = min(mu_x, size - mu_x, mu_y, size - mu_y)
+        if d > 0 and -math.expm1(-0.5 * (d / max(sigma_x, sigma_y)) ** 2)                 >= _FLOATER_MIN_ACCEPTANCE:
+            return
+        p = _gaussian_frame_probability(*params, size)
+    if not p >= _FLOATER_MIN_ACCEPTANCE:
         raise ValueError(
-            f"apply_floaters: no point landed in the frame in {rejected:,} "
-            "draws; check center, spread, angle and circle_radius_uv")
+            "apply_floaters: no point would land in the frame (a draw lands "
+            f"there with probability {p:.3g}); check center, spread and angle")
+
+
+def _check_disc_reachable(r_o) -> None:
+    """Raise when the disc sampler's radius (circle_radius_uv * overlay
+    size) is NaN or -inf: its acceptance is then NaN everywhere.  Any other
+    radius accepts at least 1% of draws."""
+    if np.isnan(r_o) or r_o == -np.inf:
+        raise ValueError(
+            "apply_floaters: no point would land in the frame "
+            f"(circle_radius_uv * 1024 = {r_o!r}); check circle_radius_uv")
 
 
 def apply_floaters(img: Image.Image, severity: float = 0.5,
@@ -1985,8 +2136,9 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         sigma_y = max(1.0, (spread_y if spread_y is not None else spread) * overlay_size)
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
+        _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
+                                  overlay_size)
         pts_x, pts_y = [], []
-        rejected = 0
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2
             dx = rng.normal(0.0, sigma_x, n)
@@ -1996,16 +2148,14 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             ok = (bx >= 0) & (bx < overlay_size) & (by >= 0) & (by < overlay_size)
             pts_x.extend(bx[ok].tolist())
             pts_y.extend(by[ok].tolist())
-            rejected = 0 if ok.any() else rejected + n
-            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
     else:
         # Faithful disc rejection sampling (3-zone IsInsideCircle).
         cx_o = cy_o = overlay_size * 0.5
         r_o = circle_radius_uv * overlay_size
+        _check_disc_reachable(r_o)
         pts_x, pts_y = [], []
-        rejected = 0
         while len(pts_x) < target:
             batch = max(target * 2, 4096)
             cxs = rng.uniform(0.0, overlay_size, size=batch)
@@ -2016,8 +2166,6 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             keep = rng.random(batch) < accept_p
             pts_x.extend(cxs[keep].tolist())
             pts_y.extend(cys[keep].tolist())
-            rejected = 0 if keep.any() else rejected + batch
-            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
 

@@ -222,13 +222,13 @@ class TestGpuStochasticMatchesCpu(GpuPrimitiveCase):
                 np.testing.assert_array_equal(gpu, cpu)
 
     def test_floaters_sampler_that_cannot_accept_raises(self):
-        # The CPU's rejection loops never end here; the twin stops after
-        # 10M draws with no point accepted.
+        # The samplers would never end here; both backends check the
+        # parameters (filters._check_*_reachable) before drawing.
         x = self.to_gpu(self.frame)
         for kw in ({"circle_radius_uv": np.nan}, {"circle_radius_uv": -np.inf},
                    {"distribution": "gaussian", "center": (5.0, 5.0), "spread": 0.01},
                    {"distribution": "gaussian", "angle": np.nan}):
-            with self.subTest(**kw), self.assertRaisesRegex(ValueError, "no point landed"):
+            with self.subTest(**kw), self.assertRaisesRegex(ValueError, "no point would land"):
                 self.sim.floaters(x, 0.5, n_floaters=200, **kw)
 
     def test_floaters_region_feather_radius_is_checked(self):

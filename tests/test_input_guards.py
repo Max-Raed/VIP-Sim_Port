@@ -2,15 +2,18 @@
 
 Pillow 12 segfaults on a NaN, infinite or huge GaussianBlur radius (Pillow
 13 raises ValueError), and apply_floaters' rejection samplers loop forever
-when no candidate point can be accepted.  Both reach the public kwargs, so
+when no candidate point can be accepted; those parameters are rejected
+before anything is drawn.  Both reach the public kwargs, so
 the filters check them first.  apply_bcg converts its input to RGB like the
 other filters instead of tone-mapping an alpha channel.
 
 Run from the repo root:  python -m unittest discover -s tests -v
 """
+import math
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -18,6 +21,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import vipsim  # noqa: E402
+from vipsim import filters  # noqa: E402
 
 # A hand-drawn cluster (normalised [y, x]) like the floater profiles use.
 REGION = [[0.30, 0.35], [0.25, 0.60], [0.45, 0.75], [0.70, 0.62], [0.65, 0.30]]
@@ -56,19 +60,67 @@ class TestBlurRadius(unittest.TestCase):
                                                region_feather=-0.01).size, img.size)
 
 
+class NoDraws:
+    """Stands in for numpy's Generator: fails the test if anything is drawn."""
+    def __getattr__(self, name):
+        raise AssertionError(f"the sampler drew ({name})")
+
+
 class TestFloatersSampler(unittest.TestCase):
-    def test_parameters_that_accept_no_point_raise(self):
+    BAD = ({"circle_radius_uv": float("nan")}, {"circle_radius_uv": -np.inf},
+           {"circle_radius_uv": -1e308},             # * 1024 overflows to -inf
+           {"distribution": "gaussian", "center": (5.0, 5.0), "spread": 0.01},
+           {"distribution": "gaussian", "center": (1.2, 0.5), "spread": 0.01},
+           {"distribution": "gaussian", "center": (float("nan"), 0.5)},
+           {"distribution": "gaussian", "center": (0.5, np.inf)},
+           {"distribution": "gaussian", "angle": float("nan")},
+           {"distribution": "gaussian", "angle": np.inf},
+           {"distribution": "gaussian", "spread": np.inf},
+           {"distribution": "gaussian", "spread": 1e6},
+           # A thin ellipse passing outside a corner: both of its x and y
+           # marginals overlap the frame, but no draw lands in it.
+           {"distribution": "gaussian", "center": (-0.2, -0.2), "spread_x": 2.0,
+            "spread_y": 0.001, "angle": -45.0})
+
+    def test_parameters_that_accept_no_point_raise_before_sampling(self):
+        # The old loops never ended here; a draw counter took minutes with
+        # one floater (2 draws per pass).  Nothing may be drawn at all.
         img = noise_image()
-        for kw in ({"circle_radius_uv": float("nan")}, {"circle_radius_uv": -np.inf},
-                   {"distribution": "gaussian", "center": (5.0, 5.0), "spread": 0.01},
-                   {"distribution": "gaussian", "center": (1.2, 0.5), "spread": 0.01},
-                   {"distribution": "gaussian", "angle": float("nan")},
-                   {"distribution": "gaussian", "spread": np.inf}):
-            with self.subTest(**kw), self.assertRaisesRegex(ValueError, "no point landed"),                     np.errstate(invalid="ignore"):            # NaN/inf geometry
-                vipsim.apply_floaters(img, 0.5, n_floaters=200, **kw)
+        for kw in self.BAD:
+            for n in (1, 200):
+                with self.subTest(n_floaters=n, **kw), \
+                        mock.patch.object(np.random, "default_rng", lambda seed=None: NoDraws()), \
+                        self.assertRaisesRegex(ValueError, "no point would land"):
+                    vipsim.apply_floaters(img, 1.0, n_floaters=n, **kw)
+
+    def test_frame_probability_matches_closed_form(self):
+        # Axis-aligned (0 and 180 degrees, and 90 with the spreads swapped),
+        # the probability is a product of two normal-CDF differences.
+        phi = lambda z: 0.5 * (1 + math.erf(z / math.sqrt(2)))      # noqa: E731
+        for mu_x, mu_y, sx, sy in ((512, 512, 164, 164), (1049.6, 512, 10.24, 10.24),
+                                   (-300, 900, 400, 50), (1070.0, 512, 10.24, 10.24)):
+            exact = ((phi((1024 - mu_x) / sx) - phi(-mu_x / sx))
+                     * (phi((1024 - mu_y) / sy) - phi(-mu_y / sy)))
+            for angle in (0.0, 90.0, 180.0):
+                rad = np.deg2rad(angle)
+                sxa, sya = (sx, sy) if angle != 90.0 else (sy, sx)
+                with self.subTest(mu=(mu_x, mu_y), sigma=(sx, sy), angle=angle):
+                    p = filters._gaussian_frame_probability(mu_x, mu_y, sxa, sya, np.cos(rad),
+                                                            np.sin(rad), 1024.0)
+                    self.assertAlmostEqual(p / exact, 1.0, delta=1e-3)
+
+    def test_threshold(self):
+        # 4.1 and 5.6 sigma off the right edge: in-frame probability about
+        # 2e-5 and 1e-8, on either side of _FLOATER_MIN_ACCEPTANCE (1e-7).
+        sigma = 10.24
+        filters._check_gaussian_reachable(1024 + 4.1 * sigma, 512, sigma, sigma, 1.0, 0.0, 1024.0)
+        with self.assertRaisesRegex(ValueError, "no point would land"):
+            filters._check_gaussian_reachable(1024 + 5.6 * sigma, 512, sigma, sigma, 1.0, 0.0,
+                                              1024.0)
 
     def test_low_but_nonzero_acceptance_still_finishes(self):
-        # A centre 2.5 sigma off-frame accepts ~0.6% of draws: slow, not stuck.
+        # A centre 2.5 sigma off-frame accepts ~0.6% of draws: slow, not stuck,
+        # and the same image as before (the checks draw nothing).
         out = vipsim.apply_floaters(noise_image(), 0.5, n_floaters=500, seed=3,
                                     distribution="gaussian", center=(0.5, 1.025), spread=0.01)
         self.assertEqual(out.size, (64, 48))
