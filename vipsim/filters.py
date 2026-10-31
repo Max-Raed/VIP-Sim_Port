@@ -15,6 +15,7 @@ Usage (installed: `vipsim ...` or `python -m vipsim ...`):
 
 import argparse
 import math
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -186,9 +187,11 @@ def _to_uint8(x: np.ndarray, scale: float = 255.0) -> np.ndarray:
     Truncating with astype(np.uint8) instead biases every output ~0.5 LSB
     darker, and the bias accumulates when filters are chained.
     """
-    y = np.multiply(x, scale)
+    # The old expression's own product: np.multiply(x, scale) converts big
+    # Python ints differently (OverflowError for 2**63 with an int scale).
+    y = np.asarray(x) * scale
     if not (type(y) is np.ndarray and y.dtype.kind == "f"):
-        return np.clip(np.rint(np.asarray(x) * scale), 0, 255).astype(np.uint8)
+        return np.clip(np.rint(y), 0, 255).astype(np.uint8)
     np.rint(y, out=y)
     np.clip(y, 0, 255, out=y)
     return y.astype(np.uint8)
@@ -704,9 +707,9 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
 
     # Bias = w * (n_levels - 1): per-pixel float "level"
     bias = w_scaled * (n_levels - 1)
-    if bias.shape == (h, w):
+    if type(bias) is np.ndarray and bias.shape == (h, w):
         out = _blend_mip_levels(arr, bias, n_levels)
-    else:  # array mask kwargs broadcast bias to another shape: as before
+    else:  # array or masked mask kwargs: the old stacked lookup
         lo = np.floor(bias).astype(np.int32)
         hi = np.clip(lo + 1, 0, n_levels - 1)
         frac = (bias - lo)[..., None]
@@ -1229,6 +1232,9 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
         suction_strength = 0.2 + severity * 1.8  # 0.2..2.0
 
     aspect = w / h
+    # Before ys_up/ys_dn, as before #6: with several bad kwargs the
+    # centre's error is still the one raised.
+    adj_cx = cx * aspect
     # Elliptical field: stretch y so the ellipse becomes a circle of radius
     # `vortex_radius` in the working space; sampling positions are unstretched
     # on the way back out. `radius_y_down` allows an asymmetric vertical
@@ -1249,18 +1255,29 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
         (inner_center, halo_center), (inner_color, halo_color))
     if use_box:
         R, A = float(vortex_radius), float(noise_amount)
-        fcx, fcy = float(cx), float(cy)
+        # The field's centre is cx * aspect in cx's own precision (NEP 50:
+        # a float16 cx rounds it by up to 2**-11 relative, many pixels far
+        # off-frame), so place the box around that value, not around cx.
+        with np.errstate(all="ignore"):  # the field below warns as before
+            fcx = float(cx * aspect) / aspect
+        fcy = float(cy)
         reach = R + abs(A * R)
         reach_up = reach / abs(float(ys_up)) if ys_up else np.inf
         reach_dn = reach / abs(float(ys_dn)) if ys_dn else np.inf
         # The field is computed in float32: keep its rounding (a few ulps of
         # these magnitudes, in pixels) far below the 2 px margin, and keep
-        # every value inside float32 range. A non-positive reach (negative
-        # radius) also takes the whole frame.
+        # every value inside float32 range. Also the whole frame:
+        # - a reach below 2**-50 (or a negative radius): every pixel outside
+        #   the box has a stretched |dy| above reach, and below that dy * dy
+        #   can underflow to 0, which puts far pixels inside the field;
+        # - a noise_scale whose float32 hash (p_u * 12.9898 + p_v * 78.233)
+        #   can overflow: sin(inf) is NaN, and the whole-frame arr[y0, x0]
+        #   raises on it even at pixels outside the box.
         scale = h * (aspect * (1.0 + abs(fcx)) + 1.0 + abs(fcy)
                      + reach + reach_up + reach_dn)
-        use_box = (reach > 0 and np.isfinite(scale) and scale < 2.0 ** 18
-                   and max(abs(R), abs(A)) < 1e30)
+        use_box = (reach > 2.0 ** -50 and np.isfinite(scale)
+                   and scale < 2.0 ** 18 and max(abs(R), abs(A)) < 1e30
+                   and (noise_scale is None or abs(float(noise_scale)) < 1e30))
     if use_box:
         # |dx| < reach  <=>  |col + 0.5 - cx * w| < reach * h, likewise rows
         c0 = int(min(w, max(0, np.floor(fcx * w - 0.5 - reach * h) - 2)))
@@ -1277,7 +1294,6 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
 
     adj_x = xx * aspect
     adj_y = yy
-    adj_cx = cx * aspect
     adj_cy = cy
     dx = adj_x - adj_cx
     dy_raw = adj_y - adj_cy
@@ -1922,12 +1938,28 @@ def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
 
 # apply_floaters' Gaussian and disc rejection samplers loop until enough
 # points land in the frame, so parameters under which (almost) no draw can
-# land would loop forever.  They are checked before sampling: a non-finite
-# centre, spread or angle, a disc radius of NaN or -inf, or a Gaussian
-# whose draws land in the frame with probability below this raise
-# ValueError.  Nothing is drawn, so every run that does not raise samples
-# exactly as before (at this rate one point already takes ~1e7 draws).
+# land would loop forever.  They are checked before sampling, and nothing is
+# drawn, so every run that does not raise samples exactly as before:
+# - a non-finite centre, spread or angle, or a disc radius of NaN or -inf,
+#   raises ValueError;
+# - so does a Gaussian whose draws land in the frame with probability below
+#   _FLOATER_MIN_ACCEPTANCE, unless the expected number of draws for all its
+#   points, n_floaters / p, stays within _FLOATER_MAX_EXPECTED_DRAWS (a few
+#   floaters far off-frame still finish, in seconds to minutes);
+# - a Gaussian that passes but would need more than _FLOATER_DRAW_BUDGET
+#   draws (about 40 s) warns with its estimated run time, then samples.
 _FLOATER_MIN_ACCEPTANCE = 1e-7
+_FLOATER_MAX_EXPECTED_DRAWS = 1e8
+_FLOATER_DRAW_BUDGET = 1e9
+_FLOATER_DRAWS_PER_SEC = 2.5e7     # vectorised rng.normal pair + mask
+_FLOATER_PASS_COST = 300.0         # fixed cost of one pass, in draws
+
+
+def _gaussian_sampling_cost(p: float, n: int) -> float:
+    """Expected cost, in draws, of sampling n points at acceptance p:
+    n / p draws, plus about H_n / (2 p) passes (each draws 2 * remaining)."""
+    h_n = math.log(n) + 0.5772156649 + 0.5 / n if n > 1 else 1.0
+    return n / p + _FLOATER_PASS_COST * h_n / (2.0 * p)
 
 
 def _normal_cdf(z: np.ndarray) -> np.ndarray:
@@ -1937,63 +1969,97 @@ def _normal_cdf(z: np.ndarray) -> np.ndarray:
     return np.asarray(flat, dtype=np.float64).reshape(z.shape)
 
 
+_GL_X, _GL_W = np.polynomial.legendre.leggauss(16)
+# Where a conditional bound is this many sds from the conditional mean the
+# normal CDF is saturated (Phi(-8.3) ~ 5e-17); pieces end at these.
+_GL_T = np.array([-8.3, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 8.3])
+
+
 def _gaussian_frame_probability(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
-                                size, n: int = 2048) -> float:
+                                size) -> float:
     """Probability that one draw of apply_floaters' rotated Gaussian lands
     in [0, size)^2.
 
-    A draw is mu + sigma_x*u*(cos_a, sin_a) + sigma_y*v*(-sin_a, cos_a) with
-    u, v ~ N(0, 1).  For fixed u both frame bounds are linear in v, so the
-    v-mass is a difference of normal CDFs; that is integrated over the
-    range of u that can reach the frame.  The midpoint rule never samples
-    the range ends, where an axis-aligned frame edge makes the integrand
-    jump."""
-    cx = np.array([0.0, size, 0.0, size])
-    cy = np.array([0.0, 0.0, size, size])
-    u_c = ((cx - mu_x) * cos_a + (cy - mu_y) * sin_a) / sigma_x
-    lo, hi = max(float(u_c.min()), -38.0), min(float(u_c.max()), 38.0)
-    if not lo < hi:                     # frame beyond 38 sigma along u
+    A draw (x, y) = mu + sigma_x*u*(cos_a, sin_a) + sigma_y*v*(-sin_a, cos_a)
+    with u, v ~ N(0, 1) is bivariate normal.  Given x, y is normal with mean
+    m(x) = mu_y + k*(x - mu_x) and sd s, so the probability is the integral
+    over x in [0, size) of pdf_x(x) * P(0 <= y < size | x).  The integrand
+    is smooth there; its only sharp features are where m(x) crosses a y edge
+    (width s/|k|).  Gauss-Legendre (16 nodes) on pieces that end at those
+    crossings, +-1..8.3 conditional sds around them, and every sd_x / 2
+    integrates it to ~1e-10 relative."""
+    sd_x = math.hypot(sigma_x * cos_a, sigma_y * sin_a)
+    sd_y = math.hypot(sigma_x * sin_a, sigma_y * cos_a)
+    # A marginal density never exceeds 1/(sqrt(2 pi) sd): the frame then
+    # holds less than 1e-12 (and squaring the spreads below could overflow).
+    if size / (math.sqrt(2.0 * math.pi) * max(sd_x, sd_y)) < 1e-12:
         return 0.0
-    h = (hi - lo) / n
-    u = lo + h * (np.arange(n) + 0.5)
-    v_lo = np.full(n, -np.inf)
-    v_hi = np.full(n, np.inf)
-    with np.errstate(over="ignore", invalid="ignore"):
-        for mu, a, c in ((mu_x, sigma_x * cos_a, -sigma_y * sin_a),
-                         (mu_y, sigma_x * sin_a, sigma_y * cos_a)):
-            b = mu + a * u              # this coordinate at v = 0
-            if c == 0.0:
-                v_hi = np.where((b >= 0.0) & (b < size), v_hi, -np.inf)
-            else:
-                e0, e1 = -b / c, (size - b) / c
-                v_lo = np.maximum(v_lo, np.minimum(e0, e1))
-                v_hi = np.minimum(v_hi, np.maximum(e0, e1))
-    mass = np.clip(_normal_cdf(v_hi) - _normal_cdf(v_lo), 0.0, None)
-    pdf = np.exp(-0.5 * u * u) / math.sqrt(2.0 * math.pi)
-    return float(h * np.sum(pdf * mass))
+    lo, hi = max(0.0, mu_x - 38.0 * sd_x), min(size, mu_x + 38.0 * sd_x)
+    if not lo < hi:                     # frame beyond 38 sigma along x
+        return 0.0
+    k = (sigma_x * sigma_x - sigma_y * sigma_y) * sin_a * cos_a / (sd_x * sd_x)
+    s = sigma_x * sigma_y / sd_x        # sd of y given x
+    cuts = [mu_x + 0.5 * sd_x * np.arange(-76.0, 77.0)]
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        if k != 0.0:
+            for edge in (0.0, size):
+                cuts.append(mu_x + (edge - mu_y - s * _GL_T) / k)
+        cuts = np.concatenate(cuts)
+        cuts = np.unique(np.clip(cuts[np.isfinite(cuts)], lo, hi))
+    cuts = np.unique(np.concatenate(([lo, hi], cuts)))
+    half = 0.5 * np.diff(cuts)
+    x = ((cuts[:-1] + half)[:, None] + half[:, None] * _GL_X).ravel()
+    w = (half[:, None] * _GL_W).ravel()
+    m = mu_y + k * (x - mu_x)
+    a, b = -m / s, (size - m) / s       # P(a <= z < b), a < b
+    flip = a > 0.0                      # both in the upper tail: mirror
+    mass = np.clip(_normal_cdf(np.where(flip, -a, b))
+                   - _normal_cdf(np.where(flip, -b, a)), 0.0, None)
+    pdf = np.exp(-0.5 * ((x - mu_x) / sd_x) ** 2) / (math.sqrt(2.0 * math.pi) * sd_x)
+    return float(np.sum(w * pdf * mass))
 
 
 def _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
-                              size) -> None:
-    """Raise when a draw of the Gaussian sampler lands in the frame with
-    probability below _FLOATER_MIN_ACCEPTANCE (or its parameters are not
-    finite)."""
-    params = np.array([mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a],
-                      dtype=np.float64)
+                              size, target: int = None) -> None:
+    """Check the Gaussian sampler's parameters before it draws target points
+    (see the rules above _FLOATER_MIN_ACCEPTANCE): raise ValueError where it
+    would (practically) never finish, warn where it would take long.  Without
+    target, only the _FLOATER_MIN_ACCEPTANCE floor applies."""
+    n = 1 if target is None else target
+    # A 1-element array (np.array([30.]) as angle, say) broadcasts like a
+    # scalar in the sampler, which then draws the scalar's points: check its
+    # value.  Larger arrays are left to np.array below, as before.
+    vals = [np.asarray(v).reshape(-1)[0] if np.ndim(v) and np.size(v) == 1
+            else v for v in (mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a)]
+    mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a = vals
+    params = np.array(vals, dtype=np.float64)
     if not np.isfinite(params).all():
         p = 0.0
     else:
         # The disc of radius d (centre to nearest edge) lies in the frame and
         # holds at least 1 - exp(-d^2 / 2 sigma_max^2) of the mass: when that
-        # suffices, skip the integral (~5 ms) for the usual in-frame centre.
+        # bound already passes both checks, skip the integral.
         d = min(mu_x, size - mu_x, mu_y, size - mu_y)
-        if d > 0 and -math.expm1(-0.5 * (d / max(sigma_x, sigma_y)) ** 2)                 >= _FLOATER_MIN_ACCEPTANCE:
-            return
+        if d > 0:
+            p_lb = -math.expm1(-0.5 * (d / max(sigma_x, sigma_y)) ** 2)
+            if (p_lb >= _FLOATER_MIN_ACCEPTANCE
+                    and _gaussian_sampling_cost(p_lb, n) <= _FLOATER_DRAW_BUDGET):
+                return
         p = _gaussian_frame_probability(*params, size)
-    if not p >= _FLOATER_MIN_ACCEPTANCE:
+    limit = _FLOATER_MIN_ACCEPTANCE
+    if target is not None:
+        limit = min(limit, target / _FLOATER_MAX_EXPECTED_DRAWS)
+    if not p >= limit:
         raise ValueError(
             "apply_floaters: no point would land in the frame (a draw lands "
             f"there with probability {p:.3g}); check center, spread and angle")
+    cost = _gaussian_sampling_cost(p, n)
+    if cost > _FLOATER_DRAW_BUDGET:
+        warnings.warn(
+            f"apply_floaters: a draw lands in the frame with probability "
+            f"{p:.3g}, so {n} floaters need about {n / p:.3g} "
+            f"draws (roughly {cost / _FLOATER_DRAWS_PER_SEC:,.0f} s); move "
+            "center into the frame or widen spread", RuntimeWarning, stacklevel=3)
 
 
 def _check_disc_reachable(r_o) -> None:
@@ -2137,7 +2203,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
         _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
-                                  overlay_size)
+                                  overlay_size, target)
         pts_x, pts_y = [], []
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2

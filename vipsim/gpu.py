@@ -968,21 +968,31 @@ def _led_brightness(brightness, h: int, w: int):
     """brightness as _led_lut takes it.
 
     A scalar (Python number, numpy scalar, 0-d array) is returned as given,
-    so numpy's NEP 50 promotion stays the CPU's.  An array or list is what
-    apply_led multiplies its (h, w, 3) cells by: one that broadcasts to that
-    shape with only its last axis longer than 1 ((1,), (3,), (1, 3),
-    (1, 1, 3), ...) comes back as a 0-d or (3,) array of the same dtype.
-    numpy's ValueError where the CPU cannot broadcast it; NotImplementedError
-    for any other shape (per-pixel brightness), which no level table holds.
+    so numpy's NEP 50 promotion stays the CPU's.  Anything else goes through
+    apply_led's own product on one cell first, so a torch tensor or an
+    np.matrix (a matrix product) raises what the CPU raises.  One that
+    broadcasts to (h, w, 3) with only its last axis longer than 1 ((1,),
+    (3,), (1, 3), (1, 1, 3), ...) comes back as a 0-d or (3,) array of the
+    same dtype; a MaskedArray stays one, so numpy.ma's arithmetic (a masked
+    channel keeps the cell's level) builds the table as on the CPU.
+    numpy's ValueError where the CPU cannot broadcast it, the CPU's
+    Image.fromarray TypeError where the product has more than 3 axes, and
+    NotImplementedError for per-pixel shapes, which no level table holds.
     """
     if np.ndim(brightness) == 0:
         return brightness
-    b = np.asarray(brightness)
-    shape = np.broadcast_shapes((h, w, 3), b.shape)    # the CPU's ValueError
-    if shape != (h, w, 3) or any(n != 1 for n in b.shape[:-1]):
+    probe = np.ones((1, 1, 3), np.float32) * brightness
+    shape = np.broadcast_shapes((h, w, 3), probe.shape)    # the CPU's ValueError
+    if len(shape) > 3:
+        # The CPU computes an image of this shape; Image.fromarray rejects it.
+        raise TypeError(f"Cannot handle this data type: {(1, 1) + shape[2:]}, |u1")
+    masked = type(probe) is np.ma.MaskedArray
+    if (not (masked or type(probe) is np.ndarray) or shape != (h, w, 3)
+            or any(n != 1 for n in probe.shape[:-1])):
         raise NotImplementedError(
-            f"led: brightness of shape {b.shape} is not supported on the GPU; "
-            "use a scalar or a per-channel (3,) brightness")
+            f"led: brightness of shape {np.shape(brightness)} is not supported "
+            "on the GPU; use a scalar or a per-channel (3,) brightness")
+    b = np.ma.asarray(brightness) if masked else np.asarray(brightness)
     return b.reshape(()) if b.size == 1 else b.reshape(3)
 
 
@@ -1438,7 +1448,7 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
         _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
-                                  overlay_size)
+                                  overlay_size, target)
         pts_x, pts_y = [], []
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2

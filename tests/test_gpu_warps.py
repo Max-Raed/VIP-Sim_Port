@@ -321,7 +321,10 @@ class TestGpuWarpsEdgeCases(GpuWarpCase):
             {"vortex_radius": inf}, {"noise_amount": inf}, {"noise_amount": -inf},
             {"suction_strength": inf}, {"suction_strength": -inf},
             {"suction_strength": nan}, {"swirl_strength": inf},
-            {"swirl_strength": nan}, {"falloff_exponent": nan})]
+            {"swirl_strength": nan}, {"falloff_exponent": nan},
+            # the noise hash overflows float32 outside the field only
+            {"noise_scale": 4e36, "vortex_radius": 0.1},
+            {"noise_scale": -4e36, "vortex_radius": 0.1, "center": (0.15, 0.15)})]
         for name, s, kw in cases:
             with self.subTest(filter=name, severity=s, **kw), np.errstate(invalid="ignore"):
                 with self.assertRaises(Exception) as cpu:
