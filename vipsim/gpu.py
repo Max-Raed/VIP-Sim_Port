@@ -88,6 +88,8 @@ _LEVELS = np.arange(256, dtype=np.float32) / 255.0
 
 def clamp_severity(severity) -> float:
     """float(np.clip(severity, 0, 1)) — the first line of every CPU apply_*."""
+    if type(severity) is float and 0.0 < severity < 1.0:
+        return severity              # what np.clip returns, without its ~10 us
     return float(np.clip(severity, 0.0, 1.0))
 
 
@@ -168,28 +170,59 @@ def _box_blur_weights(box_radius: float) -> tuple:
     return r, ww, fw
 
 
+def _box_blur_index(n: int, r: int, device) -> torch.Tensor:
+    """clamp(k - r - 1, 0, n - 1) for k = 0 .. n + 2r + 1: the replicated-edge
+    source of every padded position, built once per (n, r, device) (at most
+    64 x 512 KiB kept; longer ones, from huge radii, are built per call)."""
+    if n + 2 * r + 2 > 1 << 16:
+        return torch.arange(-r - 1, n + r + 1, device=device).clamp_(0, n - 1)
+    return _box_blur_index_cached(n, r, device)
+
+
+@functools.lru_cache(maxsize=64)
+def _box_blur_index_cached(n: int, r: int, device) -> torch.Tensor:
+    return torch.arange(-r - 1, n + r + 1, device=device).clamp_(0, n - 1)
+
+
+# Up to this many elements a pass keeps its levels in int64 (fewest kernels:
+# small batches are launch-bound); larger ones sum in int32 and convert back,
+# which moves half the bytes (measured on an RTX 4050: int64 throughout was
+# 10-25% slower from ~2M elements, where int32 intermediates still fit in L2).
+_BOX_BLUR_INT64_NUMEL = 1 << 20
+
+
 def _box_blur_pass(t: torch.Tensor, r: int, ww: int, fw: int,
                    dim: int) -> torch.Tensor:
     """One extended-box pass along `dim` (replicated edges).
 
-    int32 levels: Pillow's fixed-point pass, bit-exact (window sums in
-    int32, read as Pillow's UINT32 accumulator, the 24-bit products in
-    int64).  float64: the same weights without the 8-bit rounding.  Window
-    sums come from a cumulative sum, so the cost does not grow with the
-    radius.
+    Integer levels: Pillow's fixed-point pass, bit-exact.  Window sums in
+    int64, or in int32 for large tensors (wrapping like Pillow's UINT32
+    accumulator); either is read unsigned only where a window of 255s can
+    overflow it.  The 24-bit products are int64.  8 kernels per pass (6 for
+    r = 0), 10 (8) for large tensors.  float64: the same weights without
+    the 8-bit rounding.  Window sums come from a cumulative sum, so the cost
+    does not grow with the radius.
     """
     n = t.shape[dim]
-    idx = torch.arange(-r - 1, n + r + 1, device=t.device).clamp_(0, n - 1)
-    p = t.index_select(dim, idx)                     # p[k] = in[clamp(k - r - 1)]
-    cs = p.cumsum(dim, dtype=p.dtype)
-    acc = cs.narrow(dim, 2 * r + 1, n) - cs.narrow(dim, 0, n)   # in[x-r..x+r]
+    p = t.index_select(dim, _box_blur_index(n, r, t.device))  # p[k] = in[clamp(k - r - 1)]
     edges = p.narrow(dim, 0, n) + p.narrow(dim, 2 * r + 2, n)  # in[x-r-1], in[x+r+1]
     if t.is_floating_point():
+        cs = p.cumsum(dim)
+        acc = cs.narrow(dim, 2 * r + 1, n) - cs.narrow(dim, 0, n)   # in[x-r..x+r]
         return (acc * ww + edges * fw) / (1 << 24)
-    # A window of 255s overflows int32 from r ~ 4.2M px (255 * (2r + 1) >
-    # 2**31 - 1); the wrapped sum is still the UINT32 sum modulo 2**32.
-    bulk = acc.long().bitwise_and_(0xFFFFFFFF).mul_(ww).add_(edges, alpha=fw)
-    return bulk.add_(1 << 23).bitwise_right_shift_(24).int()
+    wide = t.numel() <= _BOX_BLUR_INT64_NUMEL
+    if r == 0:
+        # Sub-pixel box (radius < ~1 px): the window is the pixel itself.
+        bulk = p.narrow(dim, 1, n).long()
+    else:
+        cs = p.cumsum(dim) if wide else p.cumsum(dim, dtype=p.dtype)
+        bulk = cs.narrow(dim, 2 * r + 1, n) - cs.narrow(dim, 0, n)    # in[x-r..x+r]
+        limit = 0x7FFFFFFF if cs.dtype == torch.int32 else 0xFFFFFFFF
+        bulk = bulk.long()
+        if 255 * (2 * r + 1) > limit:    # the window sum can wrap
+            bulk.bitwise_and_(0xFFFFFFFF)
+    bulk = bulk.mul_(ww).add_(edges, alpha=fw).add_(1 << 23).bitwise_right_shift_(24)
+    return bulk if wide else bulk.int()
 
 
 def pil_gaussian_blur(x: torch.Tensor, radius: float, quantize: bool = True,
@@ -205,14 +238,33 @@ def pil_gaussian_blur(x: torch.Tensor, radius: float, quantize: bool = True,
     within 1 LSB for radius >= 1.5 px, but up to 3 LSB on noise at sub-pixel
     radii, where PIL's six roundings outweigh the blur itself.
     """
+    if quantize:
+        return _from_u8(_blur_levels(_u8(x), radius, passes), x.dtype)
     if radius == 0:                    # PIL returns a copy for radius 0
-        return quantize_u8(x) if quantize else x
+        return x
     r, ww, fw = _box_blur_weights(pil_box_radius(radius, passes))
-    t = _u8(x).int() if quantize else x.double()
+    t = x.double()
     for dim in (-1, -2):                             # all horizontal passes first
         for _ in range(passes):
             t = _box_blur_pass(t, r, ww, fw, dim)
-    return _from_u8(t, x.dtype) if quantize else t.to(x.dtype)
+    return t.to(x.dtype)
+
+
+def _blur_levels(levels: torch.Tensor, radius: float, passes: int = 3) -> torch.Tensor:
+    """pil_gaussian_blur on integer 8-bit levels, returning integer levels.
+
+    Filters that blur an image they already hold as levels (bloom, the
+    field_loss pyramid) call this directly: _u8(_from_u8(t)) is t for levels
+    0..255, so skipping that round trip changes no value.
+    """
+    if radius == 0:                    # PIL returns a copy for radius 0
+        return levels
+    r, ww, fw = _box_blur_weights(pil_box_radius(radius, passes))
+    t = levels.int()
+    for dim in (-1, -2):                             # all horizontal passes first
+        for _ in range(passes):
+            t = _box_blur_pass(t, r, ww, fw, dim)
+    return t
 
 
 # -----------------------------------------------------------------------------
@@ -306,14 +358,55 @@ def gather_nearest(x: torch.Tensor, iy: torch.Tensor,
     in-range indices (_check_numpy_index raises where numpy would).  Pure
     copies, so the result is exact.
     """
-    N, C, H, W = x.shape
-    lin = iy.long().clamp(0, H - 1) * W + ix.long().clamp(0, W - 1)
+    H, W = x.shape[-2:]
+    return _gather_flat(x, _flat_index(iy, ix, H, W))
+
+
+def _flat_index(iy: torch.Tensor, ix: torch.Tensor, H: int, W: int) -> torch.Tensor:
+    """The edge-clamped flat source index gather_nearest reads, [Ho, Wo] or
+    [N, Ho, Wo].  It depends only on the maps, so filters whose maps are
+    cached keep this instead of rebuilding it on every call."""
+    return iy.long().clamp(0, H - 1) * W + ix.long().clamp(0, W - 1)
+
+
+def _gather_flat(x: torch.Tensor, lin: torch.Tensor) -> torch.Tensor:
+    """gather_nearest with its flat index (_flat_index) already built."""
+    N, C, _, _ = x.shape
     flat = x.flatten(2)                              # [N, C, H*W]
     if lin.dim() == 2:
         return flat.index_select(2, lin.reshape(-1)).view(N, C, *lin.shape)
     lin = lin.expand(N, -1, -1)
     out = flat.gather(2, lin.reshape(N, 1, -1).expand(-1, C, -1))
     return out.view(N, C, *lin.shape[1:])
+
+
+def _bilinear_plan(fy: torch.Tensor, fx: torch.Tensor, H: int, W: int) -> tuple:
+    """Everything of gather_bilinear that depends only on the coordinates:
+    the four corners' flat indices and the weights wx, 1 - wx, wy, 1 - wy,
+    computed by the same ops, so cached coordinates need no per-call work."""
+    fx = fx.clamp(0, W - 1)
+    fy = fy.clamp(0, H - 1)
+    x0 = fx.floor()
+    y0 = fy.floor()
+    wx = fx - x0
+    wy = fy - y0
+    x0 = x0.long()
+    y0 = y0.long()
+    x1 = (x0 + 1).clamp(max=W - 1)
+    y1 = (y0 + 1).clamp(max=H - 1)
+    if wx.dim() == 3:                                # per-sample maps
+        wx, wy = wx.unsqueeze(1), wy.unsqueeze(1)
+    return (_flat_index(y0, x0, H, W), _flat_index(y0, x1, H, W),
+            _flat_index(y1, x0, H, W), _flat_index(y1, x1, H, W),
+            wx, 1.0 - wx, wy, 1.0 - wy)
+
+
+def _gather_bilinear_plan(x: torch.Tensor, plan: tuple) -> torch.Tensor:
+    """gather_bilinear with its _bilinear_plan already built."""
+    l00, l01, l10, l11, wx, omwx, wy, omwy = plan
+    top = _gather_flat(x, l00) * omwx + _gather_flat(x, l01) * wx
+    bot = _gather_flat(x, l10) * omwx + _gather_flat(x, l11) * wx
+    return top * omwy + bot * wy
 
 
 def gather_bilinear(x: torch.Tensor, fy: torch.Tensor,
@@ -332,21 +425,7 @@ def gather_bilinear(x: torch.Tensor, fy: torch.Tensor,
     Same op order as the CPU, so equal-dtype inputs give identical results.
     """
     H, W = x.shape[-2:]
-    fx = fx.clamp(0, W - 1)
-    fy = fy.clamp(0, H - 1)
-    x0 = fx.floor()
-    y0 = fy.floor()
-    wx = fx - x0
-    wy = fy - y0
-    x0 = x0.long()
-    y0 = y0.long()
-    x1 = (x0 + 1).clamp(max=W - 1)
-    y1 = (y0 + 1).clamp(max=H - 1)
-    if wx.dim() == 3:                                # per-sample maps
-        wx, wy = wx.unsqueeze(1), wy.unsqueeze(1)
-    top = gather_nearest(x, y0, x0) * (1.0 - wx) + gather_nearest(x, y0, x1) * wx
-    bot = gather_nearest(x, y1, x0) * (1.0 - wx) + gather_nearest(x, y1, x1) * wx
-    return top * (1.0 - wy) + bot * wy
+    return _gather_bilinear_plan(x, _bilinear_plan(fy, fx, H, W))
 
 
 def _check_numpy_index(shape: tuple, *index: np.ndarray) -> None:
@@ -1412,6 +1491,13 @@ class VipSimGPU:
             return self.to_device(out, dtype)
         return self.cached(name, params, hw, build, dtype)
 
+    def _flat_map(self, maps) -> torch.Tensor:
+        """(sy, sx) int32 numpy maps of an [H, W] image -> the device flat
+        index gather_nearest(x, sy, sx) reads (_flat_index), for caching."""
+        sy, sx = maps
+        H, W = sy.shape
+        return _flat_index(self.to_device(sy), self.to_device(sx), H, W)
+
     def _random_field(self, name: str, params, hw, seed, n: int, fn, convert=None):
         """convert(fn()), where fn() draws a [C, H, W] field from `seed`.
 
@@ -1442,25 +1528,43 @@ class VipSimGPU:
         mean <= 0.20 LSB after rounding (tests/test_gpu_primitives.py).
         """
         H, W = x.shape[-2:]
+        if quantize:
+            return _from_u8(self._resize_levels(_u8(x), width, height, resample),
+                            x.dtype)
         if (width, height) == (W, H):                # PIL returns a copy
-            return quantize_u8(x) if quantize else x
+            return x
         if resample == "nearest":
-            iy, ix = self.cached(
-                "pil_resize_nearest", (width, height), (H, W),
-                lambda: (self.to_device(_pil_nearest_index(H, height)),
-                         self.to_device(_pil_nearest_index(W, width))))
-            return gather_nearest(quantize_u8(x) if quantize else x,
-                                  iy[:, None], ix[None, :])
+            return self._resize_levels(x, width, height, resample)
         if resample != "bilinear":
             raise ValueError(f"Unsupported resample: {resample}")
-        if not quantize:
-            return F.interpolate(x, size=(height, width), mode="bilinear",
-                                 align_corners=False, antialias=True)
+        return F.interpolate(x, size=(height, width), mode="bilinear",
+                             align_corners=False, antialias=True)
+
+    def _resize_levels(self, t: torch.Tensor, width: int, height: int,
+                       resample: str = "bilinear") -> torch.Tensor:
+        """pil_resize on integer 8-bit levels (int64), returning levels.
+
+        Filters that resize an image they already hold as levels (bloom,
+        pixelation) call this directly: _u8(_from_u8(t)) is t for levels
+        0..255, so skipping that round trip changes no value.  NEAREST only
+        copies, so it also takes float images.
+        """
+        H, W = t.shape[-2:]
+        if (width, height) == (W, H):                # PIL returns a copy
+            return t
+        if resample == "nearest":
+            lin = self.cached(
+                "pil_resize_nearest", (width, height), (H, W),
+                lambda: _flat_index(self.to_device(_pil_nearest_index(H, height))[:, None],
+                                    self.to_device(_pil_nearest_index(W, width))[None, :],
+                                    H, W))
+            return _gather_flat(t, lin)
+        if resample != "bilinear":
+            raise ValueError(f"Unsupported resample: {resample}")
         ix, kx, iy, ky = self.cached(
             "pil_resize_bilinear", (width, height), (H, W),
             lambda: tuple(self.to_device(a) for a in
                           _pil_bilinear_taps(W, width) + _pil_bilinear_taps(H, height)))
-        t = _u8(x)
         vertical_first = _pil_vertical_first(W, H, width, height)
         if vertical_first:
             t = _resample_pass(t.transpose(-1, -2), iy, ky).transpose(-1, -2)
@@ -1468,7 +1572,7 @@ class VipSimGPU:
             t = _resample_pass(t, ix, kx)
         if height != H and not vertical_first:
             t = _resample_pass(t.transpose(-1, -2), iy, ky).transpose(-1, -2)
-        return _from_u8(t, x.dtype)
+        return t
 
     # ---- sRGB <-> linear on 8-bit images ------------------------------------
     def _srgb_to_linear_u8(self, x: torch.Tensor) -> torch.Tensor:
@@ -1534,17 +1638,22 @@ class VipSimGPU:
         """Twin of apply_bcg.  Brightness, contrast and gamma are a table of
         the 256 levels; any color_space other than 'srgb' runs in linear
         light, as on the CPU."""
-        tone = _bcg_tone(brightness, contrast, gamma, color_space)   # numpy, [256]
+        # The tables only depend on these four keywords, so they are built
+        # (by numpy, ~0.1 ms) once per exact key, never per frame.  _freeze
+        # keys NumPy scalars by dtype, so float64 tables from NumPy-scalar
+        # kwargs never share an entry with float32 ones.
+        tone_key = (brightness, contrast, gamma, color_space)
         levels = _u8(x)
         if saturation == 1.0:
             # No channel mixing: the whole filter is a table of the levels.
-            table = _to_uint8(tone if color_space == "srgb" else _linear_to_srgb(tone))
-            lut = self.numpy_field("bcg_lut", table, (256,), lambda: table)
+            def lut_table():
+                tone = _bcg_tone(brightness, contrast, gamma, color_space)  # numpy, [256]
+                return _to_uint8(tone if color_space == "srgb" else _linear_to_srgb(tone))
+            lut = self.numpy_field("bcg_lut", tone_key, (256,), lut_table)
             return _from_u8(lut[levels], x.dtype)
-        # Keyed by the table itself (values and dtype), so float64 tables
-        # from NumPy-scalar kwargs never share an entry with float32 ones.
-        arr = self.cached("bcg_tone", tone, (256,),
-                          lambda: torch.from_numpy(tone).to(self.device))[levels]
+        arr = self.cached("bcg_tone", tone_key, (256,),
+                          lambda: torch.from_numpy(_bcg_tone(
+                              brightness, contrast, gamma, color_space)).to(self.device))[levels]
         # Saturation (extension): lerp toward per-pixel luminance
         luma = self.numpy_field("bcg_luma", (), (), lambda: _BCG_LUMA, torch.float32)
         # numpy's float32 `arr @ luma` calls sdot per pixel on 1-px-wide images.
@@ -1577,9 +1686,9 @@ class VipSimGPU:
         out = _from_u8(_channel_lookup(lut, x), x.dtype)
         # 2. Frost: noise-driven uv displacement, truncated to source pixels.
         if use_frosting:
-            sy, sx = self.numpy_field("cataracts_frost", (severity,), (H, W),
-                                      lambda: _cataract_frost_maps(H, W, severity))
-            out = gather_nearest(out, sy, sx)
+            lin = self.cached("cataracts_frost", (severity,), (H, W),
+                              lambda: self._flat_map(_cataract_frost_maps(H, W, severity)))
+            out = _gather_flat(out, lin)
         return out
 
     # ---- bloom: 8-bit linear threshold, PIL blur, linear-light add ----------
@@ -1602,14 +1711,16 @@ class VipSimGPU:
         # 1. Downsample the 8-bit linear image by 4 (PIL BILINEAR), as the
         # CPU's float32 k/255 whatever x's dtype: fp16 k/255 would move the
         # threshold's rounding boundaries.
-        down = self.pil_resize(_from_u8(lin[levels], torch.float32),
-                               max(1, W // 4), max(1, H // 4))
+        # The 8-bit intermediates stay integer levels from here on (blur and
+        # resize on levels): _u8(_from_u8(t)) is t, so no value changes.
+        down = _from_u8(self._resize_levels(lin[levels], max(1, W // 4),
+                                            max(1, H // 4)), torch.float32)
         # 2. Threshold-extract in numpy's dtypes (float32 unless an operand is
         # a numpy scalar or array that promotes it).
         bright, threshold = _numpy_operand(down, threshold)
         bright = (bright - threshold).clamp(min=0.0)
         bright, intensity = _numpy_operand(bright, intensity)
-        bright = bright * intensity
+        bright = _u8(bright * intensity)
         # 3. _separable_gaussian: PIL GaussianBlur of the 8-bit image, with a
         # radius growing by 1.5 px per iteration; radius <= 0 is skipped.
         for i in range(iterations):
@@ -1620,9 +1731,9 @@ class VipSimGPU:
                 # NaN and inf are not skipped, and PIL's box radius is then
                 # NaN: Pillow 13 raises this (Pillow 12.2 crashes).
                 raise ValueError("radius must be >= 0")
-            bright = pil_gaussian_blur(bright, radius * 1.5)
+            bright = _blur_levels(bright, radius * 1.5)
         # 4. Upsample the 8-bit bloom and add it in linear light.
-        bloom = _u8(self.pil_resize(bright, W, H))
+        bloom = self._resize_levels(bright, W, H)
         return _from_u8(composite[levels, bloom], x.dtype)
 
     # ---- field_loss: per-pixel blend of two blur-pyramid levels -------------
@@ -1641,18 +1752,24 @@ class VipSimGPU:
         def build():
             lo, hi, frac = _field_loss_maps(H, W, *params)
             used = tuple(int(lvl) for lvl in np.union1d(lo, hi))
-            return (used, self.to_device(lo), self.to_device(hi),
-                    self.to_device(frac, torch.float64))
-        used, lo, hi, frac = self.cached("field_loss_maps", params, (H, W), build)
+            lo, hi = self.to_device(lo), self.to_device(hi)
+            frac = self.to_device(frac, torch.float64)
+            # Level 0 is where every sample starts, so only the blurred
+            # levels need a mask.
+            masks = tuple((lvl, lo == lvl, hi == lvl) for lvl in used if lvl != 0)
+            return masks, frac, 1 - frac
+        masks, frac, keep = self.cached("field_loss_maps", params, (H, W), build)
         # _build_mip_pyramid: level 0 is the float32 input, level l its PIL
         # blur with radius 2**(l-1).  Only the levels some pixel reads are built.
-        arr = _from_u8(_u8(x), torch.float32)
+        levels = _u8(x)
+        arr = _from_u8(levels, torch.float32)
         lo_sample = hi_sample = arr
-        for lvl in used:
-            mip = arr if lvl == 0 else pil_gaussian_blur(arr, float(2 ** (lvl - 1)))
-            lo_sample = torch.where(lo == lvl, mip, lo_sample)
-            hi_sample = torch.where(hi == lvl, mip, hi_sample)
-        out = lo_sample * (1 - frac) + hi_sample * frac     # float64, as on the CPU
+        for lvl, lo_mask, hi_mask in masks:
+            # pil_gaussian_blur(arr, ...), on the levels arr was made from.
+            mip = _from_u8(_blur_levels(levels, float(2 ** (lvl - 1))), torch.float32)
+            lo_sample = torch.where(lo_mask, mip, lo_sample)
+            hi_sample = torch.where(hi_mask, mip, hi_sample)
+        out = lo_sample * keep + hi_sample * frac           # float64, as on the CPU
         return _from_u8(_u8(out), x.dtype)
 
     # ---- distortion: one gather through the CPU's index maps ----------------
@@ -1666,9 +1783,9 @@ class VipSimGPU:
             return x
         H, W = x.shape[-2:]
         centres = _distortion_centres(severity, warp_centers)
-        sy, sx = self.numpy_field("distortion", centres, (H, W),
-                                  lambda: _distortion_maps(H, W, *centres))
-        return quantize_u8(gather_nearest(x, sy, sx))
+        lin = self.cached("distortion", centres, (H, W),
+                          lambda: self._flat_map(_distortion_maps(H, W, *centres)))
+        return quantize_u8(_gather_flat(x, lin))
 
     # ---- double_vision: mean of two whole-pixel shifts ----------------------
     def double_vision(self, x: torch.Tensor, severity: float = 0.5,
@@ -1733,21 +1850,33 @@ class VipSimGPU:
         if dx or dy:
             def shifts():
                 ry, rx = (torch.arange(n, device=self.device) for n in (H, W))
-                return ry - dy, rx - dx, ry + dy, rx + dx
-            in_y, in_x, back_y, back_x = self.cached("pixelation_shift", (dx, dy),
-                                                     (H, W), shifts)
-            x = gather_nearest(x, in_y[:, None], in_x[None, :])
+                return (_flat_index((ry - dy)[:, None], (rx - dx)[None, :], H, W),
+                        _flat_index((ry + dy)[:, None], (rx + dx)[None, :], H, W))
+            lin_in, lin_back = self.cached("pixelation_shift", (dx, dy), (H, W), shifts)
+        # On 8-bit levels throughout (gathers only copy, and the small image
+        # is never needed as floats: _u8(_from_u8(t)) is t).
+        t = _u8(x)
+        if dx or dy:
+            t = _gather_flat(t, lin_in)
         down = "nearest" if sampling == "point" else "bilinear"
         if hard:
-            small = self.pil_resize(x, cells_x, cells_y, down)
-            out = self.pil_resize(small, W, H, "nearest")  # HARD square blocks
+            small = self._resize_levels(t, cells_x, cells_y, down)
+            if small is t or down == "nearest":
+                # Not rounded by a BILINEAR pass: clamp as _u8(_from_u8(small))
+                # would: a no-op on levels 0..255, and NaN input keeps its old result.
+                small = small.clamp(0, 255)
+            out = self._resize_levels(small, W, H, "nearest")  # HARD square blocks
         else:
             # Same cell count on both axes, as on the CPU, then bilinear up.
-            small = self.pil_resize(x, cells_x, cells_x, down)
-            out = self.pil_resize(small, W, H)
+            small = self._resize_levels(t, cells_x, cells_x, down)
+            if small is t or down == "nearest":
+                # Not rounded by a BILINEAR pass: clamp as _u8(_from_u8(small))
+                # would: a no-op on levels 0..255, and NaN input keeps its old result.
+                small = small.clamp(0, 255)
+            out = self._resize_levels(small, W, H)
         if dx or dy:  # shift the content back; the grid keeps the offset
-            out = gather_nearest(out, back_y[:, None], back_x[None, :])
-        return out
+            out = _gather_flat(out, lin_back)
+        return _from_u8(out, x.dtype)
 
     # ---- led: cell texels times the LED mask, in linear light ---------------
     def led(self, x: torch.Tensor, severity: float = 0.5, scale: float = None,
@@ -1772,14 +1901,15 @@ class VipSimGPU:
         def fields():
             sy, sx, mask, keep = _led_fields(H, W, scale, shape, margin,
                                              automatic_ratio)
-            return (self.to_device(sy), self.to_device(sx),
+            return (_flat_index(self.to_device(sy)[:, None],
+                                self.to_device(sx)[None, :], H, W),
                     torch.from_numpy(mask).to(self.device),       # numpy's dtype
                     None if keep is None else self.to_device(keep))
-        sy, sx, mask, keep = self.cached(
+        lin, mask, keep = self.cached(
             "led_fields", (scale, shape, margin, automatic_ratio), (H, W), fields)
         lut = self.cached("led_lut", (brightness,), (),
                           lambda: torch.from_numpy(_led_lut(brightness)).to(self.device))
-        level = gather_nearest(_u8(x), sy[:, None], sx[None, :])
+        level = _gather_flat(_u8(x), lin)
         # Linear light, clipped, in numpy's promoted dtype of lut and mask.
         v = (lut[level] * mask).clamp(0.0, 1.0)
         out = self._linear_to_srgb_u8(v)
@@ -1829,19 +1959,22 @@ class VipSimGPU:
             # fy, fx go up as float64: the CPU's wx = fx - x0 is float32 minus
             # int32, i.e. float64.  The weights keep their numpy dtype, and
             # torch promotes them with the pixels exactly as numpy does.
-            return None if f is None else {
-                k: None if a is None else
-                self.to_device(a, torch.long if a.dtype.kind == "i" else
-                               torch.float64 if k in ("fy", "fx") else
-                               _torch_dtype(a.dtype))
-                for k, a in f.items()}
+            if f is None:
+                return None
+            f = {k: None if a is None else
+                 self.to_device(a, torch.long if a.dtype.kind == "i" else
+                                torch.float64 if k in ("fy", "fx") else
+                                _torch_dtype(a.dtype))
+                 for k, a in f.items()}
+            f["plan"] = _bilinear_plan(f["fy"], f["fx"], H, W)
+            return f
         f = self.cached("vortex", params, (H, W), build)
         if f is None:                                # no pixel inside the field
             return x
         levels = _u8(x)                              # the CPU's uint8 image
         arr = _from_u8(levels, torch.float32)        # np.float32(img) / 255
         src = arr.flatten(2).index_select(2, f["idx"])
-        vortexed = gather_bilinear(arr, f["fy"], f["fx"]).flatten(2)
+        vortexed = _gather_bilinear_plan(arr, f["plan"]).flatten(2)
         blended = vortexed * f["keep_out"] + src * f["s_out"]
         if f["inner_add"] is not None:
             blended = f["inner_add"] + blended * f["inner_keep"]
@@ -1860,10 +1993,11 @@ class VipSimGPU:
         if severity == 0.0:
             return x
         H, W = x.shape[-2:]
-        sy, sx = self.numpy_field(
+        lin = self.cached(
             "wiggle", (severity, freq, amplitude, timer, mode), (H, W),
-            lambda: _wiggle_maps(H, W, severity, freq, amplitude, timer, mode))
-        return quantize_u8(gather_nearest(x, sy, sx))
+            lambda: self._flat_map(_wiggle_maps(H, W, severity, freq, amplitude,
+                                                timer, mode)))
+        return quantize_u8(_gather_flat(x, lin))
 
     # ---- noise: the CPU's float32 noise field, added ------------------------
     def noise(self, x: torch.Tensor, severity: float = 0.5,
