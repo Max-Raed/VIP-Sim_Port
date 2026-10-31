@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vipsim  # noqa: E402
 from test_gpu_primitives import TRAFFIC, GpuPrimitiveCase, natural_crop  # noqa: E402
 
+SCENE = ROOT / "vipsim_assets" / "Trafficscene_2048x1024.png"
 FILTERS = ("noise", "glitch", "flickering_stars", "floaters")
 SEVERITIES = (0.001, 0.3, 0.999, 1.0)
 # A hand-drawn cluster (normalised [y, x]) like the floater profiles use.
@@ -208,6 +209,35 @@ class TestGpuStochasticMatchesCpu(GpuPrimitiveCase):
                     getattr(vipsim, "apply_" + name)(Image.fromarray(self.frame), 0.5, seed=1.0)
                 with self.assertRaises(TypeError):
                     getattr(self.sim, name)(x, 0.5, seed=1.0)
+
+    @unittest.skipUnless(SCENE.is_file(), "Trafficscene_2048x1024.png missing")
+    def test_noise_on_the_full_scene(self):
+        # (n * severity) * 0.35 instead of the CPU's n * (severity * 0.35)
+        # flips about one value in a million: too rare for the small frames.
+        frame = np.asarray(Image.open(SCENE).convert("RGB"))
+        for s in (0.3, 0.9):
+            with self.subTest(severity=s):
+                cpu = np.asarray(vipsim.apply_noise(Image.fromarray(frame), s, seed=0))
+                gpu = self.to_frame(self.sim.noise(self.to_gpu(frame), s, seed=0))
+                np.testing.assert_array_equal(gpu, cpu)
+
+    def test_floaters_sampler_that_cannot_accept_raises(self):
+        # The CPU's rejection loops never end here; the twin stops after
+        # 10M draws with no point accepted.
+        x = self.to_gpu(self.frame)
+        for kw in ({"circle_radius_uv": np.nan}, {"circle_radius_uv": -np.inf},
+                   {"distribution": "gaussian", "center": (5.0, 5.0), "spread": 0.01},
+                   {"distribution": "gaussian", "angle": np.nan}):
+            with self.subTest(**kw), self.assertRaisesRegex(ValueError, "no point landed"):
+                self.sim.floaters(x, 0.5, n_floaters=200, **kw)
+
+    def test_floaters_region_feather_radius_is_checked(self):
+        # Pillow 12 segfaults on these feather radii; Pillow 13 raises.
+        x = self.to_gpu(self.frame)
+        for feather, message in ((np.nan, "radius must be >= 0"), (np.inf, "radius must be >= 0"),
+                                 (1e7, "radius too large")):
+            with self.subTest(region_feather=feather), self.assertRaisesRegex(ValueError, message):
+                self.sim.floaters(x, 0.5, region=REGION, region_feather=feather)
 
     def test_zero_severity_is_identity(self):
         x = self.to_gpu(self.frame)

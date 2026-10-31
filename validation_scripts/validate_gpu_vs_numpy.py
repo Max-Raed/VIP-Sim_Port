@@ -73,6 +73,15 @@ KWARGS = {
 }
 
 
+def _missing_optional_dep(e: BaseException) -> bool:
+    """True when e (or its cause) is scikit-image not being installed."""
+    while e is not None:
+        if isinstance(e, ModuleNotFoundError) and (e.name or "").split(".")[0] == "skimage":
+            return True
+        e = e.__cause__
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", type=Path, default=DEFAULT_INPUT)
@@ -80,6 +89,8 @@ def main():
                     help="torch device (default: cuda if available, else cpu)")
     ap.add_argument("--out", type=Path, default=OUT,
                     help="directory for gpu_vs_numpy_summary.{json,csv}")
+    ap.add_argument("--allow-skip", action="store_true",
+                    help="exit 0 even if a filter was skipped for a missing optional dependency")
     args = ap.parse_args()
 
     try:
@@ -115,6 +126,8 @@ def main():
             # NumPy path: PIL -> filter -> PIL
             np_img = vf._FILTER_DISPATCH[name](img, **kwargs)
         except ImportError as e:           # optional extra (teichopsia: scikit-image)
+            if not _missing_optional_dep(e):
+                raise
             skipped[name] = str(e)
             print(f"  [{name:16s}] skipped: {e}")
             continue
@@ -177,7 +190,9 @@ def main():
           "bit-exact where tested, so anything above 0 flags a GPU-port "
           "discrepancy (or another BLAS's dot order, which cvd, bcg and "
           "foveal_darkness are allowed 1 LSB for).")
-    sys.exit(1 if failed or not_ported else 0)
+    if skipped and not args.allow_skip:
+        print(f"Skipped ({len(skipped)}): {', '.join(skipped)}; pass --allow-skip to accept")
+    sys.exit(1 if failed or not_ported or (skipped and not args.allow_skip) else 0)
 
 
 if __name__ == "__main__":

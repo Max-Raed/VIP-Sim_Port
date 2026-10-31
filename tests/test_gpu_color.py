@@ -61,6 +61,17 @@ VIGNETTE_KWARGS = ([{"severity": s} for s in SEVERITIES]
                       {"severity": 0.11, "radius": 0.61, "softness": 1.3}])
 
 
+def left_to_right_dot(a: np.ndarray, m: np.ndarray, sdot: bool = False) -> np.ndarray:
+    """a[..., 3] . m[i] for each row i, summed left to right without fused
+    multiply-adds, written out in numpy: the order _channel_dot replays.
+    sdot=True sums the products in float64 and rounds once."""
+    a = a.astype(m.dtype)
+    p0, p1, p2 = (a[..., j:j + 1] * m[:, j] for j in range(3))
+    if sdot:
+        return ((p0.astype(np.float64) + p1) + p2).astype(p0.dtype)
+    return (p0 + p1) + p2
+
+
 def numpy_dots_match_the_twin(vg) -> bool:
     """Does numpy sum its 3-element dots here in the order the twin replays?
 
@@ -68,18 +79,17 @@ def numpy_dots_match_the_twin(vg) -> bool:
     products left to right; on an image one pixel wide `arr @ luma` (sdot)
     adds the float32 products in float64.  That is numpy 2.5 with OpenBLAS
     0.3 on x86-64; a BLAS that fuses multiply-adds rounds some sums otherwise.
+    The answer compares numpy with left_to_right_dot, not with the twin, so
+    a twin that sums in another order cannot turn the exact checks off
+    (TestGpuColorTables checks the twin against left_to_right_dot).
     """
-    import torch
     rng = np.random.default_rng(8)
     lin = rng.random((64, 7, 3), dtype=np.float32)
     mat, luma = rng.random((3, 3)), vg._BCG_LUMA
-    x = torch.from_numpy(lin).permute(2, 0, 1)[None]          # [1, 3, H, W]
-
-    def twin(x, m, sdot=False):
-        return vg._channel_dot(x, torch.from_numpy(m), sdot)[0].permute(1, 2, 0).numpy()
-    return (np.array_equal(np.dot(lin, mat.T), twin(x.double(), mat))
-            and np.array_equal(lin @ luma[0], twin(x, luma)[..., 0])
-            and np.array_equal(lin[:, :1] @ luma[0], twin(x[..., :1], luma, True)[..., 0]))
+    return (np.array_equal(np.dot(lin, mat.T), left_to_right_dot(lin, mat))
+            and np.array_equal(lin @ luma[0], left_to_right_dot(lin, luma)[..., 0])
+            and np.array_equal(lin[:, :1] @ luma[0],
+                               left_to_right_dot(lin[:, :1], luma, True)[..., 0]))
 
 
 @functools.lru_cache(maxsize=None)
@@ -126,6 +136,15 @@ class TestGpuCvd(GpuColorCase):
             for s in SEVERITIES:
                 self.check("cvd", self.exact_dots, cvd_type=cvd_type, severity=s)
 
+    def test_monochrome_colours_where_float32_matters(self):
+        # The CPU scales monochrome's linear image in float32; in float64 these
+        # colours (about 45 in 2**24) round to another level.
+        colours = np.array([[4, 168, 83], [5, 215, 247], [11, 229, 180], [20, 87, 198],
+                            [35, 206, 175], [37, 208, 179], [40, 73, 44], [43, 168, 14]],
+                           np.uint8)
+        self.check("cvd", self.exact_dots, {"column": colours[:, None, :]},
+                   cvd_type="monochrome", severity=0.05)
+
     def test_zero_severity_returns_input_before_the_type_lookup(self):
         x = self.to_gpu(self.frame)
         self.assertIs(self.sim.cvd(x, "no-such-type", 0.0), x)
@@ -152,6 +171,18 @@ class TestGpuBcg(GpuColorCase):
         for kw in BCG_KWARGS[6:]:
             for color_space in ("linear", "srgb"):
                 self.check("bcg", self.exact_dots, frames, color_space=color_space, **kw)
+
+    def test_colours_where_sdot_and_sgemv_round_apart(self):
+        # About one colour in a million rounds differently in the two sums;
+        # random frames almost never contain one, so these columns do.
+        columns = {("linear", 0.5): [[2, 208, 103], [7, 56, 44], [29, 120, 97], [37, 181, 227],
+                                     [37, 196, 180], [46, 211, 243], [59, 156, 15], [63, 207, 211]],
+                   ("srgb", 0.0): [[1, 69, 13], [1, 178, 69], [1, 179, 253], [2, 125, 134],
+                                   [3, 45, 231], [3, 126, 135], [3, 235, 191], [4, 100, 168]]}
+        for (color_space, saturation), colours in columns.items():
+            column = {"column": np.array(colours, np.uint8)[:, None, :]}
+            self.check("bcg", self.exact_dots, column, color_space=color_space,
+                       saturation=saturation)
 
     def test_nan_saturation_matches_cpu(self):
         # NaN reaches the linear -> sRGB step, which gives it the level of
@@ -244,6 +275,17 @@ class TestGpuColorBatchAndChain(GpuColorCase):
 
 
 class TestGpuColorTables(GpuColorCase):
+    def test_channel_dot_sums_left_to_right(self):
+        import torch
+        lin = np.random.default_rng(8).random((64, 7, 3), dtype=np.float32)
+        for m in (np.random.default_rng(9).random((3, 3)), self.vg._BCG_LUMA):
+            for sdot in (False, True):
+                with self.subTest(dtype=m.dtype.name, sdot=sdot):
+                    x = torch.from_numpy(lin.astype(m.dtype)).permute(2, 0, 1)[None]
+                    twin = self.vg._channel_dot(x, torch.from_numpy(m), sdot)
+                    np.testing.assert_array_equal(twin[0].permute(1, 2, 0).numpy(),
+                                                  left_to_right_dot(lin, m, sdot))
+
     def test_srgb_tables_match_the_cpu_functions(self):
         import torch
         levels = np.arange(256, dtype=np.uint8).reshape(1, 16, 16, 1).repeat(3, -1)

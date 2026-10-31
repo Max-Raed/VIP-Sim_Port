@@ -146,6 +146,17 @@ def quantize_u8(x: torch.Tensor, scale: float = 255.0) -> torch.Tensor:
 # 8-bit modes (an 'F' image raises "image has wrong mode"), so the CPU
 # _separable_gaussian also blurs a uint8 image.
 
+def check_pil_blur_radius(radius: float) -> None:
+    """Raise ValueError where Pillow 13's GaussianBlur does: a NaN or
+    infinite radius ("radius must be >= 0"), or one of 2**31 - 64 px or more
+    either way ("radius too large").  Pillow 12 segfaults on those radii."""
+    r = float(radius)
+    if not math.isfinite(r):
+        raise ValueError("radius must be >= 0")
+    if abs(r) >= 2147483584.0:
+        raise ValueError("radius too large")
+
+
 def pil_box_radius(radius: float, passes: int = 3) -> float:
     """Pillow's _gaussian_blur_radius, evaluated in float32 like the C code.
 
@@ -235,11 +246,12 @@ def pil_gaussian_blur(x: torch.Tensor, radius: float, quantize: bool = True,
     difference 0, tests/test_gpu_primitives.py).  quantize=False runs the
     same box cascade in float64 without the per-pass rounding, for float data
     that never goes through a uint8 image; against PIL on 8-bit input it is
-    within 1 LSB for radius >= 1.5 px, but up to 3 LSB on noise at sub-pixel
-    radii, where PIL's six roundings outweigh the blur itself.
+    within 1 LSB from radius 2.25 px, 2 LSB at 1.2-2 px and up to 3 LSB on
+    noise at sub-pixel radii, where PIL's six roundings outweigh the blur.
     """
     if quantize:
         return _from_u8(_blur_levels(_u8(x), radius, passes), x.dtype)
+    check_pil_blur_radius(radius)
     if radius == 0:                    # PIL returns a copy for radius 0
         return x
     r, ww, fw = _box_blur_weights(pil_box_radius(radius, passes))
@@ -257,6 +269,7 @@ def _blur_levels(levels: torch.Tensor, radius: float, passes: int = 3) -> torch.
     field_loss pyramid) call this directly: _u8(_from_u8(t)) is t for levels
     0..255, so skipping that round trip changes no value.
     """
+    check_pil_blur_radius(radius)
     if radius == 0:                    # PIL returns a copy for radius 0
         return levels
     r, ww, fw = _box_blur_weights(pil_box_radius(radius, passes))
@@ -337,11 +350,29 @@ def _pil_nearest_index(in_size: int, out_size: int) -> np.ndarray:
     return np.minimum(idx, in_size - 1)
 
 
+# Up to this many gathered taps ([..., out, ksize]) a resample pass sums one
+# int64 gather (fewest kernels); beyond it, it adds one tap at a time in
+# int32, which never holds more than two output-sized arrays.  Pillow's
+# accumulator is int32 too, and a BILINEAR sum (non-negative 22-bit weights
+# summing to ~2**22, times 255) stays below 2**31, so both are exact.
+_RESAMPLE_GATHER_NUMEL = 1 << 22
+
+
 def _resample_pass(t: torch.Tensor, idx: torch.Tensor,
                    k: torch.Tensor) -> torch.Tensor:
-    """One fixed-point resample pass along the last dim (int64 levels)."""
-    v = (t[..., idx] * k).sum(-1) + (1 << 21)
-    return (v >> 22).clamp_(0, 255)
+    """One fixed-point resample pass along the last dim (integer levels)."""
+    if t.numel() // t.shape[-1] * idx.numel() <= _RESAMPLE_GATHER_NUMEL:
+        v = (t[..., idx] * k).sum(-1) + (1 << 21)
+        return (v >> 22).clamp_(0, 255)
+    # Contiguous along `out`: the vertical pass arrives transposed, and ksize
+    # strided gathers would cost more than this one copy.
+    t32 = t.to(torch.int32, memory_format=torch.contiguous_format)
+    k32 = k.int()
+    v = torch.full((*t.shape[:-1], idx.shape[0]), 1 << 21, dtype=torch.int32,
+                   device=t.device)
+    for j in range(idx.shape[1]):
+        v.add_(t32[..., idx[:, j]] * k32[:, j])
+    return (v >> 22).clamp_(0, 255).to(t.dtype)
 
 
 # -----------------------------------------------------------------------------
@@ -1284,6 +1315,21 @@ def _star_levels(h: int, w: int, severity: float, n_stars, seed) -> np.ndarray:
 
 
 # -- floaters ------------------------------------------------------------------
+# apply_floaters' rejection samplers loop until enough points land in the
+# frame; parameters that leave no part of it to sample (a NaN or -inf
+# circle_radius_uv, a Gaussian centred far off-frame, NaN angle or spread)
+# would loop forever.  This many draws in a row with none accepted is
+# beyond any acceptance rate above ~1e-6, so it raises instead.
+_FLOATER_MAX_REJECTED = 10_000_000
+
+
+def _check_floater_rejections(rejected: int) -> None:
+    if rejected >= _FLOATER_MAX_REJECTED:
+        raise ValueError(
+            f"apply_floaters: no point landed in the frame in {rejected:,} "
+            "draws; check center, spread, angle and circle_radius_uv")
+
+
 def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius_uv,
                     seed, distribution, center, spread, spread_x, spread_y,
                     size_variance, angle, region, region_feather,
@@ -1307,6 +1353,7 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
                 for y, x in region]
         ImageDraw.Draw(m).polygon(poly, fill=255)
         if region_feather:
+            check_pil_blur_radius(region_feather * overlay_size)
             m = m.filter(ImageFilter.GaussianBlur(region_feather * overlay_size))
         region_mask = np.asarray(m, np.float32) / 255.0
         if region_mask.max() <= 0:
@@ -1351,6 +1398,7 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
         pts_x, pts_y = [], []
+        rejected = 0
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2
             dx = rng.normal(0.0, sigma_x, n)
@@ -1360,12 +1408,15 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
             ok = (bx >= 0) & (bx < overlay_size) & (by >= 0) & (by < overlay_size)
             pts_x.extend(bx[ok].tolist())
             pts_y.extend(by[ok].tolist())
+            rejected = 0 if ok.any() else rejected + n
+            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
     else:
         cx_o = cy_o = overlay_size * 0.5
         r_o = circle_radius_uv * overlay_size
         pts_x, pts_y = [], []
+        rejected = 0
         while len(pts_x) < target:
             batch = max(target * 2, 4096)
             cxs = rng.uniform(0.0, overlay_size, size=batch)
@@ -1376,6 +1427,8 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
             keep = rng.random(batch) < accept_p
             pts_x.extend(cxs[keep].tolist())
             pts_y.extend(cys[keep].tolist())
+            rejected = 0 if keep.any() else rejected + batch
+            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
 
@@ -1505,6 +1558,10 @@ class VipSimGPU:
         image in the batch gets it, as N CPU calls with that seed would.
         seed=None or a Generator draws a new field on every CPU call, so fn()
         then runs once per image ([n, C, H, W], in batch order), uncached.
+        In a batched chain, a Generator shared by two such filters is drawn
+        filter by filter (A(f0), A(f1), B(f0), B(f1)), as the CPU running
+        each filter over the whole batch in turn would draw it, not as the
+        CPU chain run frame by frame (A(f0), B(f0), A(f1), B(f1)).
         """
         convert = convert or self.to_device
         if _fixed_seed(seed):
@@ -1725,12 +1782,8 @@ class VipSimGPU:
         # radius growing by 1.5 px per iteration; radius <= 0 is skipped.
         for i in range(iterations):
             radius = blur_size * 0.5 + i * 1.0
-            if radius * 1.5 <= 0:
+            if radius * 1.5 <= 0:      # NaN is not skipped: PIL raises on it
                 continue
-            if not math.isfinite(radius * 1.5):
-                # NaN and inf are not skipped, and PIL's box radius is then
-                # NaN: Pillow 13 raises this (Pillow 12.2 crashes).
-                raise ValueError("radius must be >= 0")
             bright = _blur_levels(bright, radius * 1.5)
         # 4. Upsample the 8-bit bloom and add it in linear light.
         bloom = self._resize_levels(bright, W, H)
@@ -2114,27 +2167,27 @@ class VipSimGPU:
         severity = clamp_severity(severity)
         if severity == 0.0:
             return x
-        x = quantize_u8(x)                           # the CPU's uint8 / 255.0
+        arr = _from_u8(_u8(x), torch.float32)        # the CPU's uint8 / 255.0
         H, W = x.shape[-2:]
         amp = severity * 0.04
         n_samples = 7
         offsets = np.linspace(-amp, amp, n_samples)
 
         # float32 sums in the CPU's order, so every rounding is the same.
-        accum = torch.zeros_like(x)
+        accum = torch.zeros_like(arr)
         for o in offsets:
             if axis == "horizontal":
                 shift = int(round(o * (W - 1)))
-                sh = torch.roll(x, shift, dims=-1)
+                sh = torch.roll(arr, shift, dims=-1)
             elif axis == "vertical":
                 shift = int(round(o * (H - 1)))
-                sh = torch.roll(x, shift, dims=-2)
+                sh = torch.roll(arr, shift, dims=-2)
             else:  # both
                 sx = int(round(o * (W - 1)))
                 sy = int(round(o * (H - 1)))
-                sh = torch.roll(x, (sy, sx), dims=(-2, -1))
+                sh = torch.roll(arr, (sy, sx), dims=(-2, -1))
             accum += sh
-        return quantize_u8(exact_div(accum, n_samples))
+        return _from_u8(_u8(exact_div(accum, n_samples)), x.dtype)
 
     # ---- flickering_stars: max(level, star level) ---------------------------
     def flickering_stars(self, x: torch.Tensor, severity: float = 0.5,
@@ -2229,7 +2282,11 @@ class VipSimGPU:
 
     # ---- Chains: presets and profiles ---------------------------------------
     def apply_chain(self, x: torch.Tensor, chain) -> torch.Tensor:
-        """Run [(method_name, kwargs), ...] in order, like apply_preset's loop."""
+        """Run [(method_name, kwargs), ...] in order, like apply_preset's loop.
+
+        Each filter runs on the whole batch before the next one: see
+        _random_field for what that means for a shared numpy Generator.
+        """
         for name, kwargs in chain:
             x = getattr(self, name)(x, **kwargs)
         return x
@@ -2256,6 +2313,11 @@ def profile_chain(profile) -> list:
     with "_" are notes; a "severity" the filter does not take (bcg) is
     dropped, where apply_stack retries the call without it.  The chain is
     what VipSimGPU.apply_chain and VisualImpairmentWrapper take.
+
+    Invalid steps fail like apply_stack's: an unknown filter name raises
+    KeyError.  An invalid severity (None, a string, a list) raises here,
+    where apply_stack's retry on any TypeError renders the filter at its
+    default severity instead.
     """
     steps = profile["filters"] if isinstance(profile, dict) else profile
     chain = []
@@ -2264,6 +2326,8 @@ def profile_chain(profile) -> list:
             continue
         kwargs = {k: v for k, v in step.items()
                   if k != "filter" and not k.startswith("_")}
+        if step["filter"] not in _FILTER_DISPATCH:  # as apply_stack's lookup
+            raise KeyError(step["filter"])
         method = getattr(VipSimGPU, step["filter"])
         if "severity" not in inspect.signature(method).parameters:
             kwargs.pop("severity", None)
@@ -2287,6 +2351,10 @@ TWIN_TOLERANCE = {name: (1, 0.02) if name in ("cvd", "bcg", "foveal_darkness")
 # -----------------------------------------------------------------------------
 def frames_to_gpu(frames: np.ndarray, device) -> torch.Tensor:
     """frames: [N,H,W,3] or [H,W,3] uint8  ->  [N,3,H,W] float32 in [0,1]."""
+    if frames.dtype != np.uint8:
+        raise TypeError(f"frames must be uint8, got {frames.dtype}")
+    if frames.ndim not in (3, 4) or frames.shape[-1] != 3:
+        raise ValueError(f"frames must be [N,H,W,3] or [H,W,3], got {frames.shape}")
     if frames.ndim == 3:
         frames = frames[None]
     if not (frames.flags.writeable and frames.flags.c_contiguous):
@@ -2301,7 +2369,7 @@ def frames_to_gpu(frames: np.ndarray, device) -> torch.Tensor:
 def gpu_to_frames(x: torch.Tensor) -> np.ndarray:
     """[N,3,H,W] float [0,1]  ->  [N,H,W,3] uint8 (back on CPU)."""
     x = (x.clamp(0, 1) * 255).round().to(torch.uint8)
-    return x.permute(0, 2, 3, 1).cpu().numpy()
+    return x.permute(0, 2, 3, 1).contiguous().cpu().numpy()
 
 
 # -----------------------------------------------------------------------------

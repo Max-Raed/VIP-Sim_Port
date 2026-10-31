@@ -96,9 +96,9 @@ class TestGpuPresetsMatchCpu(GpuChainCase):
         frame = rng.integers(0, 256, (61, 97, 3), dtype=np.uint8)
         for name, preset in vipsim.PRESETS.items():
             chain = preset["filters"]
-            if not HAVE_SKIMAGE and any(f == "teichopsia" for f, _ in chain):
-                continue                    # needs the teichopsia extra
             with self.subTest(preset=name):
+                if not HAVE_SKIMAGE and any(f == "teichopsia" for f, _ in chain):
+                    self.skipTest("needs the teichopsia extra (scikit-image)")
                 cpu = vipsim.apply_preset(Image.fromarray(frame), name)
                 self.assert_within(self.run_gpu("apply_preset", frame, name), cpu,
                                    self.chain_tolerance(chain), name)

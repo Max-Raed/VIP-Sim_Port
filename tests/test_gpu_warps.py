@@ -108,6 +108,19 @@ class TestGpuWarpsMatchCpu(GpuWarpCase):
     def test_nystagmus(self):
         self.assert_matches_cpu("nystagmus")
 
+    def test_nystagmus_reads_any_float_dtype_as_8_bit_levels(self):
+        # The CPU sums float32 levels/255; half-precision input must too.
+        frame = self.frames["random_97x161"]
+        x = self.vg.frames_to_gpu(frame, self.sim.device)
+        for kw in CASES["nystagmus"]:
+            ref = self.cpu("nystagmus", frame, 0.5, **kw)
+            for inp in (x.double(), x.half(), x.bfloat16()):
+                with self.subTest(dtype=str(inp.dtype), **kw):
+                    out = self.sim.nystagmus(inp, 0.5, **kw)
+                    self.assertEqual(out.dtype, inp.dtype)
+                    np.testing.assert_array_equal(
+                        self.vg.gpu_to_frames(out.float())[0], ref)
+
     def test_batch_of_two_different_frames(self):
         for name in CASES:
             with self.subTest(filter=name):
@@ -126,6 +139,18 @@ class TestGpuWarpsEdgeCases(GpuWarpCase):
                     with self.subTest(filter=name, shape=frame.shape, severity=s):
                         np.testing.assert_array_equal(self.gpu_batch(name, frame, s)[0],
                                                       self.cpu(name, frame, s))
+
+    def test_double_vision_shifts_of_exactly_half_a_pixel(self):
+        # severity * 0.025 * (W - 1) is an exact .5 at these sizes, where the
+        # CPU's round() goes to the even pixel, not up.
+        rng = np.random.default_rng(12)
+        for h, w, s, axis in ((64, 101, 1.0, "horizontal"), (64, 41, 0.5, "horizontal"),
+                              (64, 21, 1.0, "horizontal"), (41, 64, 0.5, "vertical")):
+            frame = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+            with self.subTest(shape=frame.shape, severity=s, axis=axis):
+                np.testing.assert_array_equal(
+                    self.gpu_batch("double_vision", frame, s, axis=axis)[0],
+                    self.cpu("double_vision", frame, s, axis=axis))
 
     def test_zero_severity_returns_input(self):
         x = self.to_gpu(self.frame)
