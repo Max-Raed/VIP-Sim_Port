@@ -90,6 +90,21 @@ class TestSrgbConversions(unittest.TestCase):
                 np.testing.assert_array_equal(got, want)
                 self.assertEqual(np.asarray(got).dtype, want.dtype)
 
+    def test_big_python_ints_follow_the_reference(self):
+        # The old expression's product: a Python int below 2**64 becomes an
+        # integer array (2**63 * 255 wraps in uint64), a larger one an object
+        # array that np.rint rejects.
+        for x in (2**63, 2**64 - 1, -2**63, 10**20, -10**20):
+            for scale in (255, 255.0, 1):
+                with self.subTest(x=x, scale=scale), np.errstate(all="ignore"):
+                    try:
+                        want = to_uint8_reference(x, scale)
+                    except Exception as e:
+                        with self.assertRaises(type(e)):
+                            vf._to_uint8(x, scale)
+                    else:
+                        np.testing.assert_array_equal(vf._to_uint8(x, scale), want)
+
     def test_ndarray_subclasses_come_back_as_plain_arrays(self):
         # The old expressions passed their result through np.asarray or
         # np.where; the in-place path would return the input's subclass.
@@ -456,6 +471,16 @@ class TestVortexBoundingBox(unittest.TestCase):
                 vf.apply_vortex(img, sev, **kw)
         else:
             np.testing.assert_array_equal(np.asarray(vf.apply_vortex(img, sev, **kw)), want)
+
+    def test_two_invalid_kwargs_raise_the_old_error(self):
+        # The old code computed cx * aspect before the vertical radii, so a
+        # bad centre raises before a bad radius_y or radius_y_down does.
+        img = noise_image(24, 32, seed=7)
+        for kw in ({"center": (0.5, (0.5,)), "radius_y": np.array([0.2, 0.1])},
+                   {"center": (0.5, (0.5,)), "radius_y_down": np.array([0.2, 0.1])},
+                   {"center": (0.5, "x"), "radius_y": np.array([0.2, 0.1])}):
+            with self.subTest(**{k: repr(v) for k, v in kw.items()}):
+                self.assert_same_outcome(img, 0.5, **kw)
 
     def test_unusual_kwargs_give_the_old_result(self):
         # Array, list and integer-typed kwargs, negative and huge radii give

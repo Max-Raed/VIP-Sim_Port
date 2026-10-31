@@ -2016,7 +2016,8 @@ def _gaussian_frame_probability(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
     mass = np.clip(_normal_cdf(np.where(flip, -a, b))
                    - _normal_cdf(np.where(flip, -b, a)), 0.0, None)
     pdf = np.exp(-0.5 * ((x - mu_x) / sd_x) ** 2) / (math.sqrt(2.0 * math.pi) * sd_x)
-    return float(np.sum(w * pdf * mass))
+    # Rounding can take a near-certain draw a few ulps past 1.
+    return min(1.0, float(np.sum(w * pdf * mass)))
 
 
 def _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
@@ -2026,11 +2027,18 @@ def _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
     would (practically) never finish, warn where it would take long.  Without
     target, only the _FLOATER_MIN_ACCEPTANCE floor applies."""
     n = 1 if target is None else target
+    limit = _FLOATER_MIN_ACCEPTANCE
+    if target is not None:
+        limit = min(limit, target / _FLOATER_MAX_EXPECTED_DRAWS)
+    vals = (mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a)
+    if any(np.ndim(v) and np.size(v) != 1 for v in vals):
+        _check_per_draw_gaussian(vals, size, limit)
+        return
     # A 1-element array (np.array([30.]) as angle, say) broadcasts like a
     # scalar in the sampler, which then draws the scalar's points: check its
-    # value.  Larger arrays are left to np.array below, as before.
+    # value.
     vals = [np.asarray(v).reshape(-1)[0] if np.ndim(v) and np.size(v) == 1
-            else v for v in (mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a)]
+            else v for v in vals]
     mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a = vals
     params = np.array(vals, dtype=np.float64)
     if not np.isfinite(params).all():
@@ -2046,9 +2054,6 @@ def _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
                     and _gaussian_sampling_cost(p_lb, n) <= _FLOATER_DRAW_BUDGET):
                 return
         p = _gaussian_frame_probability(*params, size)
-    limit = _FLOATER_MIN_ACCEPTANCE
-    if target is not None:
-        limit = min(limit, target / _FLOATER_MAX_EXPECTED_DRAWS)
     if not p >= limit:
         raise ValueError(
             "apply_floaters: no point would land in the frame (a draw lands "
@@ -2058,8 +2063,38 @@ def _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
         warnings.warn(
             f"apply_floaters: a draw lands in the frame with probability "
             f"{p:.3g}, so {n} floaters need about {n / p:.3g} "
-            f"draws (roughly {cost / _FLOATER_DRAWS_PER_SEC:,.0f} s); move "
-            "center into the frame or widen spread", RuntimeWarning, stacklevel=3)
+            f"draws (roughly {cost / _FLOATER_DRAWS_PER_SEC:,.0f} s); lower "
+            "n_floaters, move center into the frame or widen spread",
+            RuntimeWarning, stacklevel=3)
+
+
+def _check_per_draw_gaussian(vals, size, limit) -> None:
+    """_check_gaussian_reachable for a centre or angle given per draw (an
+    array of other than one element).
+
+    The sampler broadcasts such an array against its (2 * remaining,)
+    draws, so draw i takes element i.  It is left to the sampler as before
+    (which raises where the shapes do not broadcast) unless even the best
+    element's draws practically never land: p is at most the chance that x,
+    and that y, lands in [0, size), and the best such bound must reach
+    limit.  No run time is estimated here.
+    """
+    try:
+        mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a = np.broadcast_arrays(
+            *(np.asarray(v, dtype=np.float64) for v in vals))
+    except (TypeError, ValueError):
+        return
+    with np.errstate(all="ignore"):
+        sd_x = np.hypot(sigma_x * cos_a, sigma_y * sin_a)
+        sd_y = np.hypot(sigma_x * sin_a, sigma_y * cos_a)
+        p_x = _normal_cdf((size - mu_x) / sd_x) - _normal_cdf(-mu_x / sd_x)
+        p_y = _normal_cdf((size - mu_y) / sd_y) - _normal_cdf(-mu_y / sd_y)
+        p = np.nanmax(np.minimum(p_x, p_y), initial=0.0)
+    if not p >= limit:
+        raise ValueError(
+            "apply_floaters: no point would land in the frame (a draw lands "
+            f"there with probability at most {p:.3g}); check center, spread "
+            "and angle")
 
 
 def _check_disc_reachable(r_o) -> None:

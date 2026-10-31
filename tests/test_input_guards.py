@@ -170,6 +170,44 @@ class TestFloatersSampler(unittest.TestCase):
             vipsim.apply_floaters(img, 1.0, n_floaters=1, distribution="gaussian",
                                   center=(np.array([5.0]), 5.0), spread=0.01)
 
+    def test_per_draw_arrays_are_left_to_the_sampler(self):
+        # A centre or angle with one value per draw (the sampler broadcasts
+        # it against its 2 * n draws, so draw i takes element i) samples as
+        # before. Only when even the best element's draws never land does the
+        # check raise, before drawing.
+        img = noise_image()
+        for kw, ref in (({"n_floaters": 1, "angle": np.array([30.0, 30.0])},
+                         {"n_floaters": 1, "angle": 30.0}),
+                        ({"n_floaters": 100, "angle": np.full(200, 30.0)},
+                         {"n_floaters": 100, "angle": 30.0}),
+                        ({"n_floaters": 1, "angle": np.array([30.0, np.nan])},
+                         {"n_floaters": 1, "angle": 30.0}),
+                        ({"n_floaters": 1, "center": (0.5, np.array([0.5, 5.0])), "spread": 0.01},
+                         {"n_floaters": 1, "center": (0.5, 0.5), "spread": 0.01})):
+            with self.subTest(**{k: repr(v)[:40] for k, v in kw.items()}):
+                np.testing.assert_array_equal(
+                    np.asarray(vipsim.apply_floaters(img, 0.9, seed=1, distribution="gaussian", **kw)),
+                    np.asarray(vipsim.apply_floaters(img, 0.9, seed=1, distribution="gaussian", **ref)))
+        for kw in ({"center": (0.5, np.array([5.0, 5.0])), "spread": 0.01},
+                   {"center": (np.array([np.nan, np.nan]), 0.5)},
+                   {"center": (0.5, np.array([])), "spread": 0.01}):
+            with self.subTest(**{k: repr(v) for k, v in kw.items()}), \
+                    mock.patch.object(np.random, "default_rng", lambda seed=None: NoDraws()), \
+                    self.assertRaisesRegex(ValueError, "no point would land"):
+                vipsim.apply_floaters(img, 1.0, n_floaters=1, distribution="gaussian", **kw)
+        # Shapes that do not broadcast raise the sampler's own error.
+        with self.assertRaisesRegex(ValueError, "could not be broadcast"):
+            vipsim.apply_floaters(img, 1.0, n_floaters=2, distribution="gaussian",
+                                  angle=np.array([30.0, 40.0]))
+
+    def test_frame_probability_is_at_most_one(self):
+        # Rounding took these near-certain draws a few ulps past 1.
+        for args in ((277.7656738056427, 96.50697092082282, 1.902333739121869,
+                      1.766366679661765, 6.123233995736766e-17, 1.0),
+                     (985.2271110178978, 634.0905559410302, 1.716209683454598,
+                      19.370116247494984, -0.9922851187989136, 0.12397678415826907)):
+            self.assertLessEqual(filters._gaussian_frame_probability(*args, 1024.0), 1.0)
+
     def test_few_floaters_below_min_acceptance_still_sample(self):
         # 5.2 sigma off the right edge (p ~ 9.96e-8): one floater needs ~1e7
         # draws, which the old loop finished in seconds to minutes; ten

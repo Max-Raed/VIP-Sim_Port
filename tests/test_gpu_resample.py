@@ -193,32 +193,74 @@ class TestGpuLedMatchesCpu(GpuResampleCase):
             self.sim.led(x, 0.6, brightness=per_pixel)
 
 
+    def assert_same_error(self, img, x, **kw):
+        """apply_led raises, and the twin raises exactly its exception type."""
+        try:
+            vipsim.apply_led(img, 0.6, **kw)
+        except Exception as e:      # noqa: BLE001
+            want = type(e)
+        else:
+            self.fail("apply_led did not raise")
+        with self.assertRaises(Exception) as got:
+            self.sim.led(x, 0.6, **kw)
+        self.assertIs(type(got.exception), want, got.exception)
+
     def test_brightness_types_follow_the_cpu_product(self):
-        # apply_led computes cells * brightness: np.matrix is a matrix product
-        # and a torch tensor is no numpy operand (the CPU raises), numpy.ma
-        # keeps a masked channel's level, and a 4-D broadcast leaves an image
-        # Image.fromarray rejects.
+        # apply_led computes cells * brightness: an np.matrix is a matrix
+        # product, which fails at a step that depends on its shape and the
+        # frame's; a torch tensor is no numpy operand; a 4-D broadcast leaves
+        # an image Image.fromarray rejects. numpy.ma keeps a masked channel's
+        # level (and the dtype: float32 values that float64 would round
+        # differently). Complex brightness and other ndarray subclasses, which
+        # the CPU takes, get no table.
         import torch
-        a = self.frames["random_84x84"]
+
+        class Tagged(np.ndarray):
+            pass
+        for name in ("random_84x84", "random_97x61"):
+            a = self.frames[name]
+            img, x = Image.fromarray(a), self.vg.frames_to_gpu(a[None], self.sim.device)
+            for bad in (np.matrix([[0.5, 1.7, 1.0]]), np.matrix([[1.3]]),
+                        np.matrix(np.eye(3)), np.matrix([[0.5], [1.7], [1.0]]),
+                        np.matrix(np.ones((3, 2))), torch.tensor([0.5, 1.0, 1.0]),
+                        np.ones((1, 1, 1, 3)), np.ones((2, 1, 1, 3))):
+                with self.subTest(frame=name, brightness=bad):
+                    self.assert_same_error(img, x, brightness=bad)
+            for b in (np.ma.array([0.5, 1.7, 1.0], mask=[0, 1, 0]),
+                      np.ma.array([0.37, 1.31, 0.93], np.float32, mask=False),
+                      np.ma.array([0.37, 1.31, 0.93], np.float32, mask=[0, 1, 0]),
+                      np.ma.array([[np.nan, 1.7, 1.0]], mask=[[1, 0, 0]]),
+                      np.ma.array([1.3], mask=[1])):
+                with self.subTest(frame=name, brightness=b):
+                    np.testing.assert_array_equal(
+                        self.vg.gpu_to_frames(self.sim.led(x, 0.6, brightness=b))[0],
+                        np.asarray(vipsim.apply_led(img, 0.6, brightness=b)))
+            for b in (1.3 + 0j, [1 + 0j, 1, 1], np.array([0.5, 1.7, 1.0], np.complex64),
+                      np.array([0.5, 1.7, 1.0]).view(Tagged)):
+                with self.subTest(frame=name, brightness=b):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", np.exceptions.ComplexWarning)
+                        vipsim.apply_led(img, 0.6, brightness=b)
+                    with self.assertRaisesRegex(NotImplementedError, "not supported on the GPU"):
+                        self.sim.led(x, 0.6, brightness=b)
+
+    def test_doubly_invalid_kwargs_raise_the_cpu_error(self):
+        # apply_led uses scale, then brightness, then shape, then margin: the
+        # first bad one decides the exception.
+        a = self.frames["random_97x61"]
         img, x = Image.fromarray(a), self.vg.frames_to_gpu(a[None], self.sim.device)
-        for bad, exc in ((np.matrix([[0.5, 1.7, 1.0]]), ValueError),
-                         (np.matrix([[1.3]]), ValueError),
-                         (torch.tensor([0.5, 1.0, 1.0]), TypeError),
-                         (np.ones((1, 1, 1, 3)), TypeError),
-                         (np.ones((2, 1, 1, 3)), TypeError)):
-            with self.subTest(brightness=bad):
-                with self.assertRaises(exc):
-                    vipsim.apply_led(img, 0.6, brightness=bad)
-                with self.assertRaises(exc):
-                    self.sim.led(x, 0.6, brightness=bad)
-        for b in (np.ma.array([0.5, 1.7, 1.0], mask=[0, 1, 0]),
-                  np.ma.array([0.5, 1.7, 1.0], np.float32, mask=False),
-                  np.ma.array([[np.nan, 1.7, 1.0]], mask=[[1, 0, 0]]),
-                  np.ma.array([1.3], mask=[1])):
-            with self.subTest(brightness=b):
-                np.testing.assert_array_equal(
-                    self.vg.gpu_to_frames(self.sim.led(x, 0.6, brightness=b))[0],
-                    np.asarray(vipsim.apply_led(img, 0.6, brightness=b)))
+        for kw in ({"brightness": np.ones(2), "shape": "x"},
+                   {"brightness": np.ones(2), "margin": None},
+                   {"brightness": [1.0, 1.0], "margin": "x"},
+                   {"brightness": "1.3", "margin": None},
+                   {"brightness": "1.3", "shape": np.ones(2)},
+                   {"brightness": np.ones((1, 1, 1, 3)), "shape": "x"},
+                   {"brightness": np.matrix(np.eye(3)), "margin": None},
+                   {"scale": 0, "brightness": "x"},
+                   {"scale": "x", "brightness": np.ones(2)}):
+            with self.subTest(**{k: repr(v) for k, v in kw.items()}):
+                self.assert_same_error(img, x, **kw)
+
 
 if __name__ == "__main__":
     unittest.main()
