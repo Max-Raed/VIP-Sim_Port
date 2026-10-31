@@ -1,0 +1,3 @@
+# The tests need repo-only files (validation_scripts/, Unity captures), so
+# they are not shipped in the sdist.
+prune tests

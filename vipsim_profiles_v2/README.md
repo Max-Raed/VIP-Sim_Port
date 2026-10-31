@@ -94,7 +94,7 @@ has an optional swirl term + elliptical field, and the smudges are freely positi
 
 ## Known gaps
 
-- **In-Filling** has no filter in `vipsim_filters.py` (needed by P1 and P6). Add one or
+- **In-Filling** has no filter in `vipsim/filters.py` (needed by P1 and P6). Add one or
   document as out of scope.
 - P3's winner (p3b vs p3c) and P4's winner (p4b vs p4c) not yet picked.
 

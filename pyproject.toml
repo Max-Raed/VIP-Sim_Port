@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vipsim"
+dynamic = ["version"]
+description = "Visual-impairment simulation filters: a NumPy/PyTorch port of the VIP-Sim Unity shaders"
+readme = "readme.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Max Rädler" },
+    { name = "Omid Rajabi" },
+    { name = "Mark Colley" },
+]
+keywords = ["visual impairment", "low vision", "accessibility", "simulation", "image filters", "VIP-Sim"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "numpy>=2.3",
+    "pillow>=12.0",
+]
+
+[project.optional-dependencies]
+# apply_teichopsia needs scikit-image (HSV conversion, polygon raster).
+teichopsia = ["scikit-image>=0.24"]
+gpu = ["torch>=2.11"]
+gym = ["vipsim[gpu]", "gymnasium>=1.0.0"]
+all = ["vipsim[teichopsia,gpu,gym]"]
+
+[project.scripts]
+vipsim = "vipsim.filters:main"
+
+[project.urls]
+Homepage = "https://github.com/Max-Raed/VIP-Sim_Port"
+Upstream = "https://github.com/Max-Raed/VIP-Sim"
+Issues = "https://github.com/Max-Raed/VIP-Sim_Port/issues"
+
+[tool.setuptools]
+# vipsim.assets is a data-only directory (the field-loss overlay).
+packages = ["vipsim", "vipsim.assets"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vipsim.__version__" }
+
+[tool.setuptools.package-data]
+"vipsim.assets" = ["*.jpg"]
