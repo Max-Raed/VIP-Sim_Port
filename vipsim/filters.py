@@ -80,10 +80,9 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
     if severity == 0.0:
         return img.copy()
 
-    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
     # VIP-Sim is a Linear-colour-space project, so myRecolour.shader applies
     # the matrices to linear RGB (the space Machado et al. derive them in).
-    lin = _srgb_to_linear(arr)
+    lin = _image_to_linear(img.convert("RGB"))
 
     if cvd_type == "monochrome":
         gray_weights = np.array([0.299, 0.587, 0.114])
@@ -108,6 +107,18 @@ def apply_cvd(img: Image.Image, cvd_type: str = "deuteranomaly", severity: float
 # Gaussian Blur / Hyperopia (from myBlur.shader)
 # =============================================================================
 
+def _check_blur_radius(radius) -> None:
+    """Raise ValueError where Pillow 13's GaussianBlur does: a NaN or
+    infinite radius ("radius must be >= 0"), or one of 2**31 - 64 px or more
+    either way ("radius too large").  Pillow 12 segfaults on those radii,
+    taking the whole interpreter down."""
+    r = float(radius)
+    if not np.isfinite(r):
+        raise ValueError("radius must be >= 0")
+    if abs(r) >= 2147483584.0:
+        raise ValueError("radius too large")
+
+
 def apply_blur(img: Image.Image, severity: float = 0.5) -> Image.Image:
     """Apply Gaussian blur to simulate reduced visual acuity (hyperopia).
 
@@ -119,6 +130,7 @@ def apply_blur(img: Image.Image, severity: float = 0.5) -> Image.Image:
     if severity == 0.0:
         return img.copy()
     radius = severity * 15.0
+    _check_blur_radius(radius)            # NaN severity survives np.clip
     return img.filter(ImageFilter.GaussianBlur(radius=radius))
 
 
@@ -134,9 +146,35 @@ def _srgb_to_linear(x: np.ndarray) -> np.ndarray:
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
 
 
+# An 8-bit image has only 256 levels, so decode each level once and index the
+# table with the image: table[levels] holds exactly the values of
+# _srgb_to_linear(levels.astype(dtype) / 255.0), element for element, without
+# a per-pixel power.
+_SRGB_TO_LINEAR_LUT = {
+    np.dtype(dt): _srgb_to_linear(np.arange(256, dtype=dt) / 255.0)
+    for dt in (np.float32, np.float64)
+}
+
+
+def _image_to_linear(img, dtype=np.float32) -> np.ndarray:
+    """_srgb_to_linear(np.asarray(img, dtype) / 255.0), by table for 8-bit data."""
+    levels = np.asarray(img)
+    if levels.dtype != np.uint8:  # 1-bit, 16-bit, 32-bit and float modes
+        return _srgb_to_linear(levels.astype(dtype) / 255.0)
+    return _SRGB_TO_LINEAR_LUT[np.dtype(dtype)][levels]
+
+
 def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
     x = np.clip(x, 0.0, 1.0)
-    return np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1.0 / 2.4) - 0.055)
+    # np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055),
+    # evaluated in place: the same arithmetic per element, fewer temporaries.
+    out = np.power(x, 1.0 / 2.4)
+    if not isinstance(out, np.ndarray):  # scalar or 0-d input
+        return np.where(x <= 0.0031308, x * 12.92, 1.055 * out - 0.055)
+    out *= 1.055
+    out -= 0.055
+    np.multiply(x, 12.92, out=out, where=x <= 0.0031308)
+    return out
 
 
 def _to_uint8(x: np.ndarray, scale: float = 255.0) -> np.ndarray:
@@ -145,7 +183,12 @@ def _to_uint8(x: np.ndarray, scale: float = 255.0) -> np.ndarray:
     Truncating with astype(np.uint8) instead biases every output ~0.5 LSB
     darker, and the bias accumulates when filters are chained.
     """
-    return np.clip(np.rint(np.asarray(x) * scale), 0, 255).astype(np.uint8)
+    y = np.multiply(x, scale)
+    if not (isinstance(y, np.ndarray) and y.dtype.kind == "f"):
+        return np.clip(np.rint(np.asarray(x) * scale), 0, 255).astype(np.uint8)
+    np.rint(y, out=y)
+    np.clip(y, 0, 255, out=y)
+    return y.astype(np.uint8)
 
 
 # =============================================================================
@@ -164,7 +207,8 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
         color = pow(color, gamma)
 
     Args:
-        img: Input PIL Image (RGB).
+        img: Input PIL Image; converted to RGB like every other filter input
+            (alpha is dropped, not tone-mapped).
         brightness: Multiplier (1.0 = no change, <1 darker, >1 brighter).
         contrast: Multiplier (1.0 = no change, <1 less contrast, >1 more contrast).
         gamma: Exponent (1.0 = no change, >1 darker midtones, <1 lighter midtones).
@@ -180,8 +224,11 @@ def apply_bcg(img: Image.Image, brightness: float = 1.0, contrast: float = 1.0, 
             because the original VIP-Sim project's colour-space setting is
             unconfirmed.
     """
-    srgb = np.asarray(img, dtype=np.float32) / 255.0
-    arr = srgb if color_space == "srgb" else _srgb_to_linear(srgb)
+    rgb = img.convert("RGB")
+    if color_space == "srgb":
+        arr = np.asarray(rgb, dtype=np.float32) / 255.0
+    else:
+        arr = _image_to_linear(rgb)
 
     # Brightness
     arr = arr * brightness
@@ -256,12 +303,13 @@ def _perlin_noise_2d(size: int = 256, freq: float = 20.0, seed: int = 0) -> np.n
     return out
 
 
-def _apply_bcg_per_channel(arr: np.ndarray, brightness: float, contrast: float,
+def _apply_bcg_per_channel(lin: np.ndarray, brightness: float, contrast: float,
                             coeffs=(0.5, 0.5, 0.5), gamma: float = 1.0) -> np.ndarray:
     """BCG with per-channel contrast pivot — matches myBrightnessContrastGamma.shader.
 
-    Input/output is sRGB in [0,1]; the shader math runs in linear space to
-    mirror Unity's Linear colour-space rendering.
+    Input is linear RGB in [0,1] (see _image_to_linear), output is sRGB in
+    [0,1]; the shader math runs in linear space to mirror Unity's Linear
+    colour-space rendering.
 
     Formula (per-channel, linear):
         color *= brightness
@@ -270,7 +318,7 @@ def _apply_bcg_per_channel(arr: np.ndarray, brightness: float, contrast: float,
         color = pow(color, gamma)
     """
     coeffs_arr = np.array(coeffs, dtype=np.float32).reshape(1, 1, 3)
-    out = _srgb_to_linear(arr) * brightness
+    out = lin * brightness
     out = (out - coeffs_arr) * contrast + coeffs_arr
     out = np.clip(out, 0.0, 1.0)
     if gamma != 1.0:
@@ -302,13 +350,13 @@ def apply_cataracts(img: Image.Image, severity: float = 0.5,
     if severity == 0.0:
         return img.copy()
 
-    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
-    h, w = arr.shape[:2]
+    lin = _image_to_linear(img.convert("RGB"))
+    h, w = lin.shape[:2]
 
     # 1. Per-channel BCG (brightness/contrast both shrink linearly with severity)
     brightness = (1.0 - severity) if use_brightness else 1.0
     contrast = (1.0 - severity) if use_contrast else 1.0
-    arr = _apply_bcg_per_channel(arr, brightness, contrast,
+    arr = _apply_bcg_per_channel(lin, brightness, contrast,
                                   coeffs=contrast_coeff, gamma=1.0 / gamma)
 
     # 2. Frost via Perlin-noise UV displacement
@@ -362,6 +410,7 @@ def _separable_gaussian(arr: np.ndarray, radius_px: float) -> np.ndarray:
     """
     if radius_px <= 0:
         return arr
+    _check_blur_radius(radius_px)
     pil = Image.fromarray(_to_uint8(arr))
     blurred = pil.filter(ImageFilter.GaussianBlur(radius=float(radius_px)))
     return np.asarray(blurred, dtype=np.float32) / 255.0
@@ -398,8 +447,7 @@ def apply_bloom(img: Image.Image, severity: float = 0.5,
         blur_size = 1.0 + severity * 4.5
 
     # Unity renders bloom in linear colour space (sRGB framebuffer write).
-    arr_srgb = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
-    arr = _srgb_to_linear(arr_srgb)
+    arr = _image_to_linear(img.convert("RGB"))
     h, w = arr.shape[:2]
 
     # 1. Downsample by 4 (Resolution.Low → divider=4, widthMod=0.5)
@@ -450,11 +498,51 @@ def _build_mip_pyramid(arr: np.ndarray, levels: int) -> list:
     Approximates GPU mipmap chain — radius doubles per level, matching how
     each mip level halves resolution.
     """
-    pyramid = [arr]
-    for lvl in range(1, levels):
-        radius = float(2 ** (lvl - 1))
-        pyramid.append(_separable_gaussian(arr, radius_px=radius))
-    return pyramid
+    return [_mip_level(arr, lvl) for lvl in range(levels)]
+
+
+def _mip_level(arr: np.ndarray, lvl: int) -> np.ndarray:
+    """Level `lvl` of _build_mip_pyramid(arr, ...), built on its own."""
+    if lvl == 0:
+        return arr
+    return _separable_gaussian(arr, radius_px=float(2 ** (lvl - 1)))
+
+
+def _blend_mip_levels(arr: np.ndarray, bias: np.ndarray, n_levels: int) -> np.ndarray:
+    """Per-pixel lerp between mip levels floor(bias) and floor(bias) + 1.
+
+    The upper level is clamped to n_levels - 1. Evaluates the same expression
+    on the same values as stacking _build_mip_pyramid and fancy-indexing it,
+    one floor(bias) value at a time, so the n_levels x frame stack is never
+    built. Levels no pixel samples are never blurred, and where every frac of
+    a group is 0 the upper level's weight is exactly 0, so the lower level
+    stands in for it. Level indices follow the stack's indexing too: a
+    negative floor(bias) counts from the top level, and one outside
+    [-n_levels, n_levels) raises IndexError (a NaN bias casts to -2**31).
+    """
+    lo = np.floor(bias).astype(np.int32)
+    if lo.size and (lo.min() < -n_levels or lo.max() >= n_levels):
+        bad = lo.min() if lo.min() < -n_levels else lo.max()
+        raise IndexError(f"index {bad} is out of bounds for axis 0 "
+                         f"with size {n_levels}")
+    frac = bias - lo  # float32 - int32 promotes to float64
+    out = np.empty(arr.shape, dtype=np.result_type(arr, frac))
+    built = {}
+
+    def level(i):
+        if i not in built:
+            built[i] = _mip_level(arr, i)
+        return built[i]
+
+    for i in np.unique(lo).tolist():
+        sel = lo == i
+        f = frac[sel][:, None]
+        lower = level(i % n_levels)[sel]
+        upper = (level(min(max(i + 1, 0), n_levels - 1))[sel] if f.any()
+                 else lower)
+        out[sel] = lower * (1 - f) + upper * f
+        del built[i % n_levels]  # lower levels are not sampled again
+    return out
 
 
 def _radial_weight_mask(h: int, w: int, kind: str = "central",
@@ -595,7 +683,6 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
     # numLevelsOfBlur in Unity = 1 + 1 + floor(ln(max(W,H))). For 2048×1024
     # this is 1+1+floor(ln 2048)=1+1+7=9. Match that so max blur is comparable.
     n_levels = int(2 + np.floor(np.log(max(h, w))))
-    pyramid = _build_mip_pyramid(arr, n_levels)
 
     # Try the real Unity overlay first; fall back to a radial mask
     mask = None
@@ -614,17 +701,7 @@ def apply_field_loss(img: Image.Image, severity: float = 0.5,
 
     # Bias = w * (n_levels - 1): per-pixel float "level"
     bias = w_scaled * (n_levels - 1)
-    lo = np.floor(bias).astype(np.int32)
-    hi = np.clip(lo + 1, 0, n_levels - 1)
-    frac = (bias - lo)[..., None]
-
-    # Stack pyramid → shape (n_levels, h, w, 3) — small (n_levels=7) so OK
-    stack = np.stack(pyramid, axis=0)
-    # Sample lo and hi mips per pixel
-    iy, ix = np.indices((h, w))
-    lo_sample = stack[lo, iy, ix]
-    hi_sample = stack[hi, iy, ix]
-    out = lo_sample * (1 - frac) + hi_sample * frac
+    out = _blend_mip_levels(arr, bias, n_levels)
 
     return Image.fromarray(_to_uint8(out))
 
@@ -997,7 +1074,8 @@ def apply_led(img: Image.Image, severity: float = 0.5,
     severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0 and scale is None:
         return img.copy()
-    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    levels = np.asarray(img.convert("RGB"))
+    arr = levels.astype(np.float32) / 255.0
     h, w = arr.shape[:2]
     if scale is None:
         # Map severity (subtle→strong) to scale (cells-across): 200 → 20.
@@ -1028,7 +1106,12 @@ def apply_led(img: Image.Image, severity: float = 0.5,
     mask = (1.0 - c) + c * s
     # Unity renders this shader in linear color space; apply the mask in
     # linear and convert back to sRGB so cell-centre brightness matches.
-    out_lin = np.clip(_srgb_to_linear(pixelated) * mask[..., None], 0.0, 1.0)
+    if np.ndim(brightness) == 0 and brightness == 1 and pixelated.dtype == np.float32:
+        # Unscaled cells are still 8-bit levels: decode them by table.
+        lin = _image_to_linear(levels[sy[:, None], sx[None, :]])
+    else:
+        lin = _srgb_to_linear(pixelated)
+    out_lin = np.clip(lin * mask[..., None], 0.0, 1.0)
     out = _linear_to_srgb(out_lin)
 
     # 3. Optional margin (black border)
@@ -1125,7 +1208,8 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
     severity = float(np.clip(severity, 0.0, 1.0))
     if severity == 0.0:
         return img.copy()
-    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    levels = np.asarray(img.convert("RGB"))
+    arr = levels.astype(np.float32) / 255.0
     h, w = arr.shape[:2]
     cy, cx = center
     if vortex_radius is None:
@@ -1134,15 +1218,6 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
         suction_strength = 0.2 + severity * 1.8  # 0.2..2.0
 
     aspect = w / h
-
-    ys_norm = (np.arange(h, dtype=np.float32) + 0.5) / h
-    xs_norm = (np.arange(w, dtype=np.float32) + 0.5) / w
-    yy, xx = np.meshgrid(ys_norm, xs_norm, indexing="ij")
-
-    adj_x = xx * aspect
-    adj_y = yy
-    adj_cx = cx * aspect
-    adj_cy = cy
     # Elliptical field: stretch y so the ellipse becomes a circle of radius
     # `vortex_radius` in the working space; sampling positions are unstretched
     # on the way back out. `radius_y_down` allows an asymmetric vertical
@@ -1150,6 +1225,36 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
     ys_up = vortex_radius / max(radius_y, 1e-6) if radius_y else 1.0
     ys_dn = (vortex_radius / max(radius_y_down, 1e-6)
              if radius_y_down else ys_up)
+
+    # Only pixels with dist_n < vortex_radius change (the inner dot and halo
+    # are clipped to them too), and |value noise| < 1, so every changed pixel
+    # has dist < R + |noise_amount * R|. Compute only inside that ellipse's
+    # bounding box (+2 px for rounding), on the same global pixel coordinates.
+    reach = vortex_radius + abs(noise_amount * vortex_radius)
+    reach_up = reach / abs(ys_up) if ys_up else np.inf
+    reach_dn = reach / abs(ys_dn) if ys_dn else np.inf
+    # |dx| < reach  <=>  |col + 0.5 - cx * w| < reach * h, likewise for rows
+    bounds = (np.floor(cx * w - 0.5 - reach * h) - 2,
+              np.ceil(cx * w - 0.5 + reach * h) + 3,
+              np.floor(cy * h - 0.5 - reach_up * h) - 2,
+              np.ceil(cy * h - 0.5 + reach_dn * h) + 3)
+    if all(np.ndim(b) == 0 for b in bounds) and np.all(np.isfinite(bounds)):
+        c0 = int(min(w, max(0, bounds[0])))
+        c1 = int(max(0, min(w, bounds[1])))
+        r0 = int(min(h, max(0, bounds[2])))
+        r1 = int(max(0, min(h, bounds[3])))
+    else:  # non-finite centre/reach, or array-valued kwargs: whole frame
+        r0, r1, c0, c1 = 0, h, 0, w
+    box = (slice(r0, r1), slice(c0, c1))
+
+    ys_norm = (np.arange(h, dtype=np.float32) + 0.5) / h
+    xs_norm = (np.arange(w, dtype=np.float32) + 0.5) / w
+    yy, xx = np.meshgrid(ys_norm[r0:r1], xs_norm[c0:c1], indexing="ij")
+
+    adj_x = xx * aspect
+    adj_y = yy
+    adj_cx = cx * aspect
+    adj_cy = cy
     dx = adj_x - adj_cx
     dy_raw = adj_y - adj_cy
     ys = np.where(dy_raw < 0, ys_up, ys_dn)
@@ -1178,13 +1283,15 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
     dist_n = dist + noise_val * noise_amount * vortex_radius
 
     inside = dist_n < vortex_radius
-    out = arr.copy()
+    # Pixels outside the field pass through: _to_uint8(level / 255) == level
+    # for every 8-bit level, so they keep their input value.
+    out = levels.copy()
     if np.any(inside):
         eps = 1e-8
+        src = arr[box]
         angle = np.arctan2(dy, dx)
-        # Optional angular noise (small)
-        angle_noise = _value_noise(xx, yy, noise_scale)
-        angle = angle + angle_noise * noise_amount
+        # Optional angular noise (small); the same field as noise_val
+        angle = angle + noise_val * noise_amount
 
         # Radial suction: sample further out
         d_over_R = np.clip(dist_n / max(vortex_radius, eps), 0.0, 1.0)
@@ -1220,7 +1327,7 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
         t_out = np.clip((dist_n - (vortex_radius - fade_width))
                         / max(fade_width, eps), 0.0, 1.0)
         s_out = t_out * t_out * (3.0 - 2.0 * t_out)
-        blended = vortexed * (1.0 - s_out[..., None]) + arr * s_out[..., None]
+        blended = vortexed * (1.0 - s_out[..., None]) + src * s_out[..., None]
 
         # Inner core dot (grey in Unity; position/brightness/softness/opacity
         # configurable — only rendered inside the vortex field)
@@ -1236,7 +1343,7 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
 
         if inner_circle_radius > 0:
             i_fade = fade_width if inner_fade is None else inner_fade
-            grey = np.full_like(arr, inner_color)
+            grey = np.full_like(src, inner_color)
             t_in = np.clip((idist - (inner_circle_radius - i_fade))
                             / max(i_fade, eps), 0.0, 1.0)
             s_in = t_in * t_in * (3.0 - 2.0 * t_in)
@@ -1259,12 +1366,12 @@ def apply_vortex(img: Image.Image, severity: float = 0.5,
                 np.exp(-0.5 * ((hdist - halo_radius)
                                / max(halo_thickness, eps)) ** 2))
             h_alpha = band[..., None] * halo_opacity
-            halo_col = np.full_like(arr, halo_color)
+            halo_col = np.full_like(src, halo_color)
             blended = halo_col * h_alpha + blended * (1.0 - h_alpha)
 
-        out = np.where(inside[..., None], blended, arr)
+        out[box] = _to_uint8(np.where(inside[..., None], blended, src))
 
-    return Image.fromarray(_to_uint8(out))
+    return Image.fromarray(out)
 
 
 # -- Wiggle ------------------------------------------------------------------
@@ -1678,6 +1785,76 @@ def apply_flickering_stars(img: Image.Image, severity: float = 0.5,
 # Frozen-frame: paint random oriented elliptical translucent blobs over the
 # image (gaze-fixed, single texture frame).
 
+def _paint_blobs(out: np.ndarray, xs, ys, sizes, rng: "np.random.Generator",
+                 alpha: float, target_val: float,
+                 overlay_size: float = 1024.0) -> None:
+    """Blend `target_val` into a random ~60% of each blob's box, in place.
+
+    A blob of overlay size `sz` centred on pixel (y, x) covers the box of
+    pixels within s // 2 of it on each axis, s = max(1, round(sz * frame
+    side / overlay_size)), clipped to the frame, and blends the box pixels
+    where its rng.random(box shape) > 0.4. Vectorised over the blobs, with
+    the same result as painting them one at a time:
+      - PCG64 spends one draw per double, so one rng.random call for all
+        boxes in blob order yields the same values (empty boxes draw nothing);
+      - every hit applies the same float32 blend, so a pixel hit n times gets
+        it n times in a row.
+    """
+    if len(sizes) == 0:  # no blobs, no draws
+        return
+    h, w = out.shape[:2]
+    f_x = np.asarray(sizes * w / overlay_size, dtype=np.float64)
+    f_y = np.asarray(sizes * h / overlay_size, dtype=np.float64)
+    bad = ~(np.isfinite(f_x) & np.isfinite(f_y)
+            & (np.abs(f_x) < 2.0 ** 63) & (np.abs(f_y) < 2.0 ** 63))
+    if bad.any():
+        # astype(int) would wrap these to INT64_MIN; raise what the old
+        # per-blob int(round(...)) raised on the first one instead.
+        i = np.argmax(bad)
+        for f in (f_x[i], f_y[i]):
+            round(float(f))      # ValueError for NaN, OverflowError for inf
+        raise OverflowError("int too big to convert")
+    s_x = np.maximum(1, np.rint(f_x).astype(np.int64))
+    s_y = np.maximum(1, np.rint(f_y).astype(np.int64))
+    hx, hy = s_x // 2, s_y // 2
+    x0, x1 = np.maximum(0, xs - hx), np.minimum(w, xs + hx + 1)
+    y0, y1 = np.maximum(0, ys - hy), np.minimum(h, ys + hy + 1)
+    keep = (x1 > x0) & (y1 > y0)
+    bw, bh = (x1 - x0)[keep], (y1 - y0)[keep]
+    x0, y0 = x0[keep], y0[keep]
+    area = bw * bh
+    hit = rng.random(int(area.sum())) > 0.4
+    # Pixel of every draw: row-major position k within its blob's box
+    k = np.arange(hit.size) - np.repeat(np.cumsum(area) - area, area)
+    bw_k = np.repeat(bw, area)
+    rows = np.repeat(y0, area) + k // bw_k
+    cols = np.repeat(x0, area) + k % bw_k
+    hits = np.bincount((rows * w + cols)[hit], minlength=h * w).reshape(h, w)
+
+    r, c = np.nonzero(hits)
+    left = hits[r, c]
+    while r.size:
+        out[r, c] = out[r, c] * (1.0 - alpha) + target_val * alpha
+        left -= 1
+        more = left > 0
+        r, c, left = r[more], c[more], left[more]
+
+
+# apply_floaters' rejection samplers loop until enough points land in the
+# frame; parameters that leave no part of it to sample (a NaN or -inf
+# circle_radius_uv, a Gaussian centred far off-frame, NaN angle or spread)
+# would loop forever.  This many draws in a row with none accepted is
+# beyond any acceptance rate above ~1e-6, so it raises instead.
+_FLOATER_MAX_REJECTED = 10_000_000
+
+
+def _check_floater_rejections(rejected: int) -> None:
+    if rejected >= _FLOATER_MAX_REJECTED:
+        raise ValueError(
+            f"apply_floaters: no point landed in the frame in {rejected:,} "
+            "draws; check center, spread, angle and circle_radius_uv")
+
+
 def apply_floaters(img: Image.Image, severity: float = 0.5,
                      n_floaters: int = None, mode: str = "dark",
                      floater_size: int = 1, circle_radius_uv: float = 0.146,
@@ -1760,6 +1937,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
                 for y, x in region]
         ImageDraw.Draw(m).polygon(poly, fill=255)
         if region_feather:
+            _check_blur_radius(region_feather * overlay_size)
             m = m.filter(ImageFilter.GaussianBlur(region_feather * overlay_size))
         region_mask = np.asarray(m, np.float32) / 255.0
         if region_mask.max() <= 0:
@@ -1808,6 +1986,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
         pts_x, pts_y = [], []
+        rejected = 0
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2
             dx = rng.normal(0.0, sigma_x, n)
@@ -1817,6 +1996,8 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             ok = (bx >= 0) & (bx < overlay_size) & (by >= 0) & (by < overlay_size)
             pts_x.extend(bx[ok].tolist())
             pts_y.extend(by[ok].tolist())
+            rejected = 0 if ok.any() else rejected + n
+            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
     else:
@@ -1824,6 +2005,7 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         cx_o = cy_o = overlay_size * 0.5
         r_o = circle_radius_uv * overlay_size
         pts_x, pts_y = [], []
+        rejected = 0
         while len(pts_x) < target:
             batch = max(target * 2, 4096)
             cxs = rng.uniform(0.0, overlay_size, size=batch)
@@ -1834,6 +2016,8 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
             keep = rng.random(batch) < accept_p
             pts_x.extend(cxs[keep].tolist())
             pts_y.extend(cys[keep].tolist())
+            rejected = 0 if keep.any() else rejected + batch
+            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
 
@@ -1862,20 +2046,9 @@ def apply_floaters(img: Image.Image, severity: float = 0.5,
         for c in range(3):
             out[smy, smx, c] = arr[smy, smx, c] * (1.0 - alpha) + target_val * alpha
 
-    # Larger blobs painted individually with a random sub-pixel mask.
-    for sx, sy, sz in zip(xs[~small], ys[~small], sizes[~small]):
-        s_x = max(1, int(round(sz * w / overlay_size)))
-        s_y = max(1, int(round(sz * h / overlay_size)))
-        hx, hy = s_x // 2, s_y // 2
-        x0, x1 = max(0, sx - hx), min(w, sx + hx + 1)
-        y0, y1 = max(0, sy - hy), min(h, sy + hy + 1)
-        if x1 <= x0 or y1 <= y0:
-            continue
-        mask = rng.random((y1 - y0, x1 - x0)) > 0.4
-        for c in range(3):
-            tile = out[y0:y1, x0:x1, c]
-            tile[mask] = tile[mask] * (1.0 - alpha) + target_val * alpha
-            out[y0:y1, x0:x1, c] = tile
+    # Larger blobs painted with a random sub-pixel mask each.
+    _paint_blobs(out, xs[~small], ys[~small], sizes[~small], rng,
+                 alpha, target_val, overlay_size)
     return Image.fromarray(_to_uint8(out, 1.0))
 
 
