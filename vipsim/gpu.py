@@ -64,6 +64,7 @@ from __future__ import annotations
 import functools
 import inspect
 import math
+import warnings
 from collections import OrderedDict
 
 import numpy as np
@@ -77,7 +78,7 @@ from .filters import (CVD_MATRICES, PRESETS, _FILTER_DISPATCH,
                       _check_gaussian_reachable, _linear_to_srgb,
                       _load_macular_overlay, _perlin_noise_2d,
                       _radial_weight_mask, _srgb_to_linear, _to_uint8,
-                      apply_cataracts)
+                      apply_cataracts, apply_led)
 
 
 # -----------------------------------------------------------------------------
@@ -923,14 +924,10 @@ def _pixelation_grid(w: int, h: int, severity, pixel_size, hard,
 
 
 # -- led -----------------------------------------------------------------------
-def _led_fields(h: int, w: int, scale, shape, margin, automatic_ratio) -> tuple:
-    """apply_led's image-independent arrays, from its own lines.
-
-    Returns (sy, sx, mask, keep): the texel row/column of each cell (the
-    ceil-snapped coordinate truncated by astype(np.int32)), the LED mask in
-    numpy's dtype, and the margin's 0/1 map as bool (None without a margin).
-    Under NumPy 2 a np.float64 `shape` or `scale` makes the mask float64.
-    """
+def _led_cells(h: int, w: int, scale, automatic_ratio) -> tuple:
+    """apply_led's first step, from its own lines: (sy, sx), the texel
+    row/column of each cell (the ceil-snapped coordinate truncated by
+    astype(np.int32))."""
     ratio = (w / h) if automatic_ratio else 1.0
     ys = (np.arange(h, dtype=np.float32) + 0.5) / h  # pixel centers
     xs = (np.arange(w, dtype=np.float32) + 0.5) / w
@@ -940,6 +937,17 @@ def _led_fields(h: int, w: int, scale, shape, margin, automatic_ratio) -> tuple:
     coord_y = ds_y * np.ceil(ys / ds_y)
     sx = np.clip((coord_x * w).astype(np.int32), 0, w - 1)
     sy = np.clip((coord_y * h).astype(np.int32), 0, h - 1)
+    return sy, sx
+
+
+def _led_mask(h: int, w: int, scale, shape, margin, automatic_ratio) -> tuple:
+    """apply_led's steps after brightness, from its own lines: (mask, keep),
+    the LED mask in numpy's dtype and the margin's 0/1 map as bool (None
+    without a margin).  Under NumPy 2 a np.float64 `shape` or `scale` makes
+    the mask float64."""
+    ratio = (w / h) if automatic_ratio else 1.0
+    ys = (np.arange(h, dtype=np.float32) + 0.5) / h  # pixel centers
+    xs = (np.arange(w, dtype=np.float32) + 0.5) / w
     yy, xx = np.meshgrid(ys, xs, indexing="ij")
     mvx = np.abs(np.sin(xx * scale * np.pi)) * shape
     mvy = np.abs(np.sin(yy * (scale / ratio) * np.pi)) * shape
@@ -952,7 +960,7 @@ def _led_fields(h: int, w: int, scale, shape, margin, automatic_ratio) -> tuple:
         m[(yy < margin) | (yy > 1.0 - margin)] = 0.0
         m[:, (xs < margin) | (xs > 1.0 - margin)] = 0.0
         keep = m != 0.0
-    return sy, sx, mask, keep
+    return mask, keep
 
 
 def _led_lut(brightness) -> np.ndarray:
@@ -964,26 +972,40 @@ def _led_lut(brightness) -> np.ndarray:
     return _srgb_to_linear(_LEVELS * brightness)
 
 
-def _led_brightness(brightness, h: int, w: int):
-    """brightness as _led_lut takes it.
+def _led_brightness(brightness, cpu_led):
+    """brightness as _led_lut takes it, checked where apply_led uses it.
 
-    A scalar (Python number, numpy scalar, 0-d array) is returned as given,
-    so numpy's NEP 50 promotion stays the CPU's.  An array or list is what
-    apply_led multiplies its (h, w, 3) cells by: one that broadcasts to that
-    shape with only its last axis longer than 1 ((1,), (3,), (1, 3),
-    (1, 1, 3), ...) comes back as a 0-d or (3,) array of the same dtype.
-    numpy's ValueError where the CPU cannot broadcast it; NotImplementedError
-    for any other shape (per-pixel brightness), which no level table holds.
+    apply_led's own product on one cell runs first, so what that product
+    rejects (a string, a shape that cannot broadcast) raises the CPU's
+    error.  A real scalar (Python number, numpy scalar, 0-d array) is then
+    returned as given, so numpy's NEP 50 promotion stays the CPU's.  A real
+    ndarray that broadcasts to (h, w, 3) with only its last axis longer than
+    1 ((1,), (3,), (1, 3), (1, 1, 3), ...) comes back as a 0-d or (3,) array
+    of the same dtype; a MaskedArray stays one, so numpy.ma's arithmetic (a
+    masked channel keeps the cell's level) builds the table as on the CPU.
+    No level table holds anything else: complex or object values, a
+    per-pixel or 4-D brightness, any other type (an np.matrix, whose product
+    is a matrix product, or another ndarray subclass, whose arithmetic the
+    table could not follow).
+    For those cpu_led() runs apply_led itself, with the same arguments on a
+    black frame of the same size, so the CPU's exception propagates (at the
+    step it comes from); NotImplementedError where the CPU returns an image.
     """
-    if np.ndim(brightness) == 0:
-        return brightness
-    b = np.asarray(brightness)
-    shape = np.broadcast_shapes((h, w, 3), b.shape)    # the CPU's ValueError
-    if shape != (h, w, 3) or any(n != 1 for n in b.shape[:-1]):
-        raise NotImplementedError(
-            f"led: brightness of shape {b.shape} is not supported on the GPU; "
-            "use a scalar or a per-channel (3,) brightness")
-    return b.reshape(()) if b.size == 1 else b.reshape(3)
+    probe = np.ones((1, 1, 3), np.float32) * brightness
+    masked = type(probe) is np.ma.MaskedArray
+    if (masked or type(probe) is np.ndarray) and probe.dtype.kind == "f":
+        if np.ndim(brightness) == 0:
+            return brightness
+        if probe.shape == (1, 1, 3):
+            b = np.ma.asarray(brightness) if masked else np.asarray(brightness)
+            return b.reshape(()) if b.size == 1 else b.reshape(3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")    # its image is discarded
+        cpu_led()
+    raise NotImplementedError(
+        f"led: a brightness of type {type(brightness).__name__} and shape "
+        f"{np.shape(brightness)} is not supported on the GPU; use a real "
+        "scalar or a per-channel (3,) brightness")
 
 
 # -- vortex --------------------------------------------------------------------
@@ -1438,7 +1460,7 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
         _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
-                                  overlay_size)
+                                  overlay_size, target)
         pts_x, pts_y = [], []
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2
@@ -1988,16 +2010,23 @@ class VipSimGPU:
             # Map severity (subtle->strong) to scale (cells-across): 200 -> 20.
             scale = float(200.0 - severity * 180.0)
 
-        def fields():
-            sy, sx, mask, keep = _led_fields(H, W, scale, shape, margin,
-                                             automatic_ratio)
-            return (_flat_index(self.to_device(sy)[:, None],
-                                self.to_device(sx)[None, :], H, W),
-                    torch.from_numpy(mask).to(self.device),       # numpy's dtype
+        # In apply_led's order (which error a doubly invalid call raises):
+        # the cells (scale), then brightness, then the mask (shape, margin).
+        def cells():
+            sy, sx = _led_cells(H, W, scale, automatic_ratio)
+            return _flat_index(self.to_device(sy)[:, None],
+                               self.to_device(sx)[None, :], H, W)
+        lin = self.cached("led_cells", (scale, automatic_ratio), (H, W), cells)
+        b = _led_brightness(brightness, lambda: apply_led(
+            Image.new("RGB", (W, H)), severity, scale, brightness, shape,
+            margin, automatic_ratio))
+
+        def mask_fields():
+            mask, keep = _led_mask(H, W, scale, shape, margin, automatic_ratio)
+            return (torch.from_numpy(mask).to(self.device),       # numpy's dtype
                     None if keep is None else self.to_device(keep))
-        lin, mask, keep = self.cached(
-            "led_fields", (scale, shape, margin, automatic_ratio), (H, W), fields)
-        b = _led_brightness(brightness, H, W)
+        mask, keep = self.cached(
+            "led_mask", (scale, shape, margin, automatic_ratio), (H, W), mask_fields)
         lut = self.cached("led_lut", (brightness,), (),
                           lambda: torch.from_numpy(_led_lut(b)).to(self.device))
         level = _gather_flat(_u8(x), lin)

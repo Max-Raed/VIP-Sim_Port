@@ -10,7 +10,9 @@ Run from the repo root:  python -m unittest discover -s tests -v
 """
 import sys
 import unittest
+import warnings
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -20,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vipsim  # noqa: E402
 from test_gpu_primitives import TRAFFIC, GpuPrimitiveCase, natural_crop  # noqa: E402
+from test_input_guards import NoDraws  # noqa: E402
 
 SCENE = ROOT / "vipsim_assets" / "Trafficscene_2048x1024.png"
 FILTERS = ("noise", "glitch", "flickering_stars", "floaters")
@@ -90,7 +93,14 @@ class TestGpuStochasticMatchesCpu(GpuPrimitiveCase):
                    {"distribution": "gaussian", "center": (0.4, 0.6), "spread": 0.1},
                    {"distribution": "gaussian", "spread_x": 0.05, "spread_y": 0.25,
                     "angle": 30.0},
-                   {"distribution": "disc", "circle_radius_uv": 0.3, "seed": 4}):
+                   {"distribution": "disc", "circle_radius_uv": 0.3, "seed": 4},
+                   # 1-element arrays broadcast like scalars on the CPU
+                   {"distribution": "gaussian", "center": (np.array([0.4]), 0.6),
+                    "spread": np.array([0.1]), "angle": np.array([30.0])},
+                   # one angle or centre per draw, as the CPU sampler takes them
+                   {"distribution": "gaussian", "n_floaters": 100, "angle": np.full(200, 30.0)},
+                   {"distribution": "gaussian", "n_floaters": 1, "spread": 0.01,
+                    "center": (0.5, np.array([0.5, 5.0]))}):
             self.check("floaters", (0.3, 1.0), **kw)
 
     def test_floaters_mode_and_brightness(self):
@@ -223,13 +233,34 @@ class TestGpuStochasticMatchesCpu(GpuPrimitiveCase):
 
     def test_floaters_sampler_that_cannot_accept_raises(self):
         # The samplers would never end here; both backends check the
-        # parameters (filters._check_*_reachable) before drawing.
+        # parameters (filters._check_*_reachable) before drawing.  Nothing
+        # may be drawn, so a missing check fails at once instead of hanging.
         x = self.to_gpu(self.frame)
         for kw in ({"circle_radius_uv": np.nan}, {"circle_radius_uv": -np.inf},
                    {"distribution": "gaussian", "center": (5.0, 5.0), "spread": 0.01},
                    {"distribution": "gaussian", "angle": np.nan}):
-            with self.subTest(**kw), self.assertRaisesRegex(ValueError, "no point would land"):
+            with self.subTest(**kw), \
+                    mock.patch.object(np.random, "default_rng", lambda seed=None: NoDraws()), \
+                    self.assertRaisesRegex(ValueError, "no point would land"):
                 self.sim.floaters(x, 0.5, n_floaters=200, **kw)
+
+    def test_floaters_check_counts_the_target(self):
+        # The check's n_floaters / p rule needs the target: one floater 5.2
+        # sigma off the frame still samples (and warns about its passes), ten
+        # raise, and the default 50000 at 5 sigma warn about ~1.7e11 draws.
+        # Nothing may be drawn, so the warnings are errors here.
+        x = self.to_gpu(self.frame)
+        off = {"distribution": "gaussian", "center": (0.5, 1.052), "spread": 0.01}
+        with mock.patch.object(np.random, "default_rng", lambda seed=None: NoDraws()), \
+                warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            with self.assertRaisesRegex(RuntimeWarning, r"1 floaters need about 1e\+07 draws"):
+                self.sim.floaters(x, 0.5, n_floaters=1, **off)
+            with self.assertRaisesRegex(ValueError, "no point would land"):
+                self.sim.floaters(x, 0.5, n_floaters=10, **off)
+            with self.assertRaisesRegex(RuntimeWarning, r"need about 1\.74e\+11 draws"):
+                self.sim.floaters(x, 1.0, distribution="gaussian", center=(0.5, 1.05),
+                                  spread=0.01)
 
     def test_floaters_region_feather_radius_is_checked(self):
         # Pillow 12 segfaults on these feather radii; Pillow 13 raises.
