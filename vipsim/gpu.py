@@ -73,7 +73,8 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFilter
 
 from .filters import (CVD_MATRICES, PRESETS, _FILTER_DISPATCH,
-                      _box_muller, _linear_to_srgb,
+                      _box_muller, _check_blur_radius, _check_disc_reachable,
+                      _check_gaussian_reachable, _linear_to_srgb,
                       _load_macular_overlay, _perlin_noise_2d,
                       _radial_weight_mask, _srgb_to_linear, _to_uint8,
                       apply_cataracts)
@@ -147,14 +148,10 @@ def quantize_u8(x: torch.Tensor, scale: float = 255.0) -> torch.Tensor:
 # _separable_gaussian also blurs a uint8 image.
 
 def check_pil_blur_radius(radius: float) -> None:
-    """Raise ValueError where Pillow 13's GaussianBlur does: a NaN or
-    infinite radius ("radius must be >= 0"), or one of 2**31 - 64 px or more
-    either way ("radius too large").  Pillow 12 segfaults on those radii."""
-    r = float(radius)
-    if not math.isfinite(r):
-        raise ValueError("radius must be >= 0")
-    if abs(r) >= 2147483584.0:
-        raise ValueError("radius too large")
+    """filters._check_blur_radius: ValueError for exactly the radii Pillow
+    13's GaussianBlur rejects (NaN, infinite, |radius| >= 2**31 - 64), on
+    which Pillow 12 segfaults."""
+    _check_blur_radius(radius)
 
 
 def pil_box_radius(radius: float, passes: int = 3) -> float:
@@ -960,8 +957,33 @@ def _led_fields(h: int, w: int, scale, shape, margin, automatic_ratio) -> tuple:
 
 def _led_lut(brightness) -> np.ndarray:
     """_srgb_to_linear(level/255 * brightness) for the 256 input levels, in
-    the dtype apply_led computes it in."""
+    the dtype apply_led computes it in: [256] for a scalar brightness, or
+    [3, 256] (one table per channel) for a (3,) per-channel one."""
+    if np.ndim(brightness) == 1:
+        return np.ascontiguousarray(_srgb_to_linear(_LEVELS[:, None] * brightness).T)
     return _srgb_to_linear(_LEVELS * brightness)
+
+
+def _led_brightness(brightness, h: int, w: int):
+    """brightness as _led_lut takes it.
+
+    A scalar (Python number, numpy scalar, 0-d array) is returned as given,
+    so numpy's NEP 50 promotion stays the CPU's.  An array or list is what
+    apply_led multiplies its (h, w, 3) cells by: one that broadcasts to that
+    shape with only its last axis longer than 1 ((1,), (3,), (1, 3),
+    (1, 1, 3), ...) comes back as a 0-d or (3,) array of the same dtype.
+    numpy's ValueError where the CPU cannot broadcast it; NotImplementedError
+    for any other shape (per-pixel brightness), which no level table holds.
+    """
+    if np.ndim(brightness) == 0:
+        return brightness
+    b = np.asarray(brightness)
+    shape = np.broadcast_shapes((h, w, 3), b.shape)    # the CPU's ValueError
+    if shape != (h, w, 3) or any(n != 1 for n in b.shape[:-1]):
+        raise NotImplementedError(
+            f"led: brightness of shape {b.shape} is not supported on the GPU; "
+            "use a scalar or a per-channel (3,) brightness")
+    return b.reshape(()) if b.size == 1 else b.reshape(3)
 
 
 # -- vortex --------------------------------------------------------------------
@@ -1048,6 +1070,12 @@ def _vortex_fields(h, w, severity, center, vortex_radius, radius_y,
     sample_y = np.clip(sample_y, 0.0, 1.0)
     fx = sample_x * (w - 1)
     fy = sample_y * (h - 1)
+    # The CPU's arr[y0, x0] indexes every pixel it computed, not only those
+    # inside the field: a NaN coordinate (inf/NaN noise_amount, suction,
+    # swirl or falloff; inf * 0 at the rim) becomes -2**31 there and numpy
+    # raises, where _bilinear_plan would clamp it and return an image.
+    _check_numpy_index((h, w), np.floor(fy).astype(np.int32),
+                       np.floor(fx).astype(np.int32))
 
     t_out = np.clip((dist_n - (vortex_radius - fade_width))
                     / max(fade_width, eps), 0.0, 1.0)
@@ -1342,21 +1370,6 @@ def _star_levels(h: int, w: int, severity: float, n_stars, seed) -> np.ndarray:
 
 
 # -- floaters ------------------------------------------------------------------
-# apply_floaters' rejection samplers loop until enough points land in the
-# frame; parameters that leave no part of it to sample (a NaN or -inf
-# circle_radius_uv, a Gaussian centred far off-frame, NaN angle or spread)
-# would loop forever.  This many draws in a row with none accepted is
-# beyond any acceptance rate above ~1e-6, so it raises instead.
-_FLOATER_MAX_REJECTED = 10_000_000
-
-
-def _check_floater_rejections(rejected: int) -> None:
-    if rejected >= _FLOATER_MAX_REJECTED:
-        raise ValueError(
-            f"apply_floaters: no point landed in the frame in {rejected:,} "
-            "draws; check center, spread, angle and circle_radius_uv")
-
-
 def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius_uv,
                     seed, distribution, center, spread, spread_x, spread_y,
                     size_variance, angle, region, region_feather,
@@ -1424,8 +1437,9 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
         sigma_y = max(1.0, (spread_y if spread_y is not None else spread) * overlay_size)
         rad = np.deg2rad(angle)
         cos_a, sin_a = np.cos(rad), np.sin(rad)
+        _check_gaussian_reachable(mu_x, mu_y, sigma_x, sigma_y, cos_a, sin_a,
+                                  overlay_size)
         pts_x, pts_y = [], []
-        rejected = 0
         while len(pts_x) < target:
             n = (target - len(pts_x)) * 2
             dx = rng.normal(0.0, sigma_x, n)
@@ -1435,15 +1449,13 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
             ok = (bx >= 0) & (bx < overlay_size) & (by >= 0) & (by < overlay_size)
             pts_x.extend(bx[ok].tolist())
             pts_y.extend(by[ok].tolist())
-            rejected = 0 if ok.any() else rejected + n
-            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
     else:
         cx_o = cy_o = overlay_size * 0.5
         r_o = circle_radius_uv * overlay_size
+        _check_disc_reachable(r_o)
         pts_x, pts_y = [], []
-        rejected = 0
         while len(pts_x) < target:
             batch = max(target * 2, 4096)
             cxs = rng.uniform(0.0, overlay_size, size=batch)
@@ -1454,8 +1466,6 @@ def _floater_counts(h: int, w: int, n_floaters: int, floater_size, circle_radius
             keep = rng.random(batch) < accept_p
             pts_x.extend(cxs[keep].tolist())
             pts_y.extend(cys[keep].tolist())
-            rejected = 0 if keep.any() else rejected + batch
-            _check_floater_rejections(rejected)
         pts_x = np.asarray(pts_x[:target], dtype=np.float64)
         pts_y = np.asarray(pts_y[:target], dtype=np.float64)
 
@@ -1987,11 +1997,16 @@ class VipSimGPU:
                     None if keep is None else self.to_device(keep))
         lin, mask, keep = self.cached(
             "led_fields", (scale, shape, margin, automatic_ratio), (H, W), fields)
+        b = _led_brightness(brightness, H, W)
         lut = self.cached("led_lut", (brightness,), (),
-                          lambda: torch.from_numpy(_led_lut(brightness)).to(self.device))
+                          lambda: torch.from_numpy(_led_lut(b)).to(self.device))
         level = _gather_flat(_u8(x), lin)
+        if lut.dim() == 2:   # per-channel brightness: lut[c, level]
+            level = lut[torch.arange(3, device=level.device).view(-1, 1, 1), level]
+        else:
+            level = lut[level]
         # Linear light, clipped, in numpy's promoted dtype of lut and mask.
-        v = (lut[level] * mask).clamp(0.0, 1.0)
+        v = (level * mask).clamp(0.0, 1.0)
         out = self._linear_to_srgb_u8(v)
         if keep is not None:  # optional margin (black border); NaN * 0 stays NaN
             out = out * (keep | v.isnan())
